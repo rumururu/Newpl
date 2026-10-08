@@ -4,10 +4,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
+import '../game/cosmetics.dart';
+import '../game/missions.dart';
 import '../game/models.dart';
 import '../game/save.dart';
 import '../game/world.dart';
+import '../services/app_state.dart';
+import '../services/audio.dart';
 import 'chibi.dart';
+import 'common.dart';
+import 'merchant_panel.dart';
+import 'meta_screens.dart';
+import 'shop_screen.dart';
+import 'station_panel.dart';
 import 'world_painter.dart';
 
 class GameScreen extends StatefulWidget {
@@ -22,6 +31,8 @@ class _FrameNotifier extends ChangeNotifier {
   void tick() => notifyListeners();
 }
 
+enum _Overlay { none, station, merchant, pause }
+
 class _GameScreenState extends State<GameScreen>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final Ticker _ticker;
@@ -30,12 +41,14 @@ class _GameScreenState extends State<GameScreen>
   final _focus = FocusNode();
   Duration _last = Duration.zero;
   double _saveTimer = 0;
+  double _profileTimer = 0;
+  final _notified = <String>{};
 
   Offset _stick = Offset.zero;
   bool _touchFire = false;
   bool _autoFire = false;
-  bool _panelOpen = false;
-  bool _menuOpen = false;
+  _Overlay _overlay = _Overlay.none;
+  bool _modal = false; // 다이얼로그/다른 화면이 떠 있음
 
   GameWorld get w => widget.world;
 
@@ -43,12 +56,19 @@ class _GameScreenState extends State<GameScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    AppState.world = w;
+    AppState.deliverPending();
+    _notified.addAll(w.profile.claimable.map((a) => a.id));
     _ticker = createTicker(_onTick)..start();
+    AudioService.instance.startMusic();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showOffline());
   }
 
   @override
   void dispose() {
     SaveService.save(w);
+    AppState.world = null;
+    AudioService.instance.stopMusic();
     WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
     _frame.dispose();
@@ -58,16 +78,21 @@ class _GameScreenState extends State<GameScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) SaveService.save(w);
+    if (state == AppLifecycleState.resumed) {
+      AudioService.instance.startMusic();
+    } else {
+      SaveService.save(w);
+      AudioService.instance.stopMusic();
+    }
   }
 
+  // ---------------- 루프 ----------------
   void _onTick(Duration now) {
     final dt = _last == Duration.zero ? 0.016 : (now - _last).inMicroseconds / 1e6;
     _last = now;
 
     final keys = HardwareKeyboard.instance.logicalKeysPressed;
-    bool k(LogicalKeyboardKey a, LogicalKeyboardKey b) =>
-        keys.contains(a) || keys.contains(b);
+    bool k(LogicalKeyboardKey a, LogicalKeyboardKey b) => keys.contains(a) || keys.contains(b);
     var kb = Offset(
       (k(LogicalKeyboardKey.keyD, LogicalKeyboardKey.arrowRight) ? 1 : 0) -
           (k(LogicalKeyboardKey.keyA, LogicalKeyboardKey.arrowLeft) ? 1.0 : 0),
@@ -78,49 +103,78 @@ class _GameScreenState extends State<GameScreen>
     _input.move = kb != Offset.zero ? kb : _stick;
     _input.fire = _touchFire ||
         keys.contains(LogicalKeyboardKey.space) ||
-        (_autoFire && _pirateInRange());
+        (_autoFire && _targetInRange());
 
-    w.paused = _panelOpen || _menuOpen;
+    w.paused = _overlay != _Overlay.none || _modal;
     w.update(dt, _input);
+
+    for (final s in w.sfx) {
+      AudioService.instance.play(s);
+      if (s == Sfx.hurt || s == Sfx.bigExplode) AppState.haptic();
+    }
+    w.sfx.clear();
 
     _saveTimer += dt;
     if (_saveTimer > 20) {
       _saveTimer = 0;
       SaveService.save(w);
     }
+    _profileTimer += dt;
+    if (_profileTimer > 1) {
+      _profileTimer = 0;
+      for (final a in w.profile.claimable) {
+        if (_notified.add(a.id)) {
+          w.say(Speaker.advisor, '🏆 업적 달성: ${a.title}! 메뉴의 업적에서 ⭐${a.gems}를 받으세요.');
+          w.sfx.add(Sfx.gem);
+        }
+      }
+      if (w.profile.dirty) SaveService.saveProfile(w.profile);
+    }
+    // 다른 오버레이가 사라졌으면 닫기
+    if (_overlay == _Overlay.station && w.nearbyStation == null) _setOverlay(_Overlay.none);
+    if (_overlay == _Overlay.merchant && w.nearbyMerchant == null) _setOverlay(_Overlay.none);
     _frame.tick();
   }
 
-  bool _pirateInRange() =>
-      w.pirates.any((e) => (e.pos - w.player.pos).distance < 520);
+  bool _targetInRange() => w.pirates.any((e) => (e.pos - w.player.pos).distance < 520);
+
+  void _setOverlay(_Overlay o) {
+    if (_overlay == o) return;
+    setState(() => _overlay = o);
+  }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
-    if (e is KeyDownEvent) {
-      if (e.logicalKey == LogicalKeyboardKey.keyE) {
-        _interact();
-        return KeyEventResult.handled;
-      }
-      if (e.logicalKey == LogicalKeyboardKey.keyB) {
-        _act(w.buildStation);
-        return KeyEventResult.handled;
-      }
-      if (e.logicalKey == LogicalKeyboardKey.escape) {
-        setState(() {
-          if (_panelOpen) {
-            _panelOpen = false;
-          } else {
-            _menuOpen = !_menuOpen;
-          }
-        });
-        return KeyEventResult.handled;
-      }
+    if (e is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = e.logicalKey;
+    if (key == LogicalKeyboardKey.keyE) {
+      _interact();
+    } else if (key == LogicalKeyboardKey.keyB) {
+      _act(w.buildStation);
+    } else if (key == LogicalKeyboardKey.keyQ) {
+      w.fireMissiles();
+    } else if (key == LogicalKeyboardKey.keyF) {
+      w.activateShield();
+    } else if (key == LogicalKeyboardKey.shiftLeft || key == LogicalKeyboardKey.shiftRight) {
+      w.boost();
+    } else if (key == LogicalKeyboardKey.escape) {
+      _setOverlay(_overlay == _Overlay.none ? _Overlay.pause : _Overlay.none);
+    } else {
+      return KeyEventResult.ignored;
     }
-    return KeyEventResult.ignored;
+    return KeyEventResult.handled;
   }
 
   void _interact() {
-    if (w.nearbyStation != null) {
-      setState(() => _panelOpen = !_panelOpen);
+    if (_overlay != _Overlay.none) {
+      _setOverlay(_Overlay.none);
+      return;
+    }
+    if (w.nearbyMerchant != null) {
+      _setOverlay(_Overlay.merchant);
+    } else if (w.nearbyStation != null) {
+      _setOverlay(_Overlay.station);
+    } else if (w.nearbyGate != null) {
+      _act(() => w.warp(w.nearbyGate!));
     } else if (w.nearbyPlanet != null) {
       _act(() => w.upgradePlanet(w.nearbyPlanet!));
     }
@@ -128,7 +182,7 @@ class _GameScreenState extends State<GameScreen>
 
   void _act(bool Function() f) {
     if (f()) {
-      HapticFeedback.lightImpact();
+      AppState.haptic();
       SaveService.save(w);
     } else {
       w.say(Speaker.advisor, '자원이 부족하거나 지금은 할 수 없어요.');
@@ -136,6 +190,80 @@ class _GameScreenState extends State<GameScreen>
     setState(() {});
   }
 
+  Future<T?> _modalRoute<T>(Widget page) async {
+    _modal = true;
+    final r = await Navigator.of(context).push<T>(MaterialPageRoute(builder: (_) => page));
+    _modal = false;
+    AppState.deliverPending();
+    if (mounted) setState(() {});
+    return r;
+  }
+
+  Future<void> _openShop([int tab = 0]) => _modalRoute(ShopScreen(initialTab: tab));
+
+  // ---------------- 오프라인 수입 / 부활 ----------------
+  Future<void> _showOffline() async {
+    final (sec, c, o) = w.offlineEarnings(DateTime.now());
+    w.savedAt = null;
+    if (sec <= 0 || !mounted) return;
+    _modal = true;
+    final h = sec ~/ 3600;
+    final m = (sec % 3600) ~/ 60;
+    final premium = w.profile.premium;
+    final mult = await showDialog<int>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kPanelColor,
+        title: const Text('어서 오세요, 선장님!', textAlign: TextAlign.center),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ChibiPortrait(style: ChibiStyle.advisor, size: 90),
+            Text('자리를 비운 ${h > 0 ? '$h시간 ' : ''}$m분 동안\n식민지가 열심히 일했어요!',
+                textAlign: TextAlign.center, style: bodyStyle),
+            const SizedBox(height: 8),
+            Text('💰${compact(c)}  💎${compact(o)}',
+                style: const TextStyle(fontSize: 22, color: Color(0xFFFFD54F))),
+            if (!premium)
+              const Text('사령관 패스: 최대 8시간 + 자동 2배', style: dimStyle),
+          ],
+        ),
+        actions: [
+          if (!premium) TextButton(onPressed: () => Navigator.pop(ctx, 1), child: const Text('받기')),
+          FilledButton(
+            onPressed: () async {
+              final ok = premium || await AppState.money.showRewardedAd();
+              if (ctx.mounted) Navigator.pop(ctx, ok ? 2 : 1);
+            },
+            child: Text(premium ? '2배로 받기 👑' : '📺 광고 보고 2배'),
+          ),
+        ],
+      ),
+    );
+    w.applyOffline(c * (mult ?? 1), o * (mult ?? 1));
+    w.sfx.add(Sfx.coin);
+    _modal = false;
+    SaveService.save(w);
+  }
+
+  Future<void> _reviveWithAd() async {
+    _modal = true;
+    final ok = w.profile.premium || await AppState.money.showRewardedAd();
+    _modal = false;
+    if (ok) w.reviveHere();
+  }
+
+  void _reviveWithGems() {
+    if (w.profile.spendGems(10)) {
+      w.reviveHere();
+      SaveService.saveProfile(w.profile);
+    } else {
+      _openShop();
+    }
+  }
+
+  // ---------------- 빌드 ----------------
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
@@ -148,153 +276,213 @@ class _GameScreenState extends State<GameScreen>
         onKeyEvent: _onKey,
         child: Stack(
           children: [
+            Positioned.fill(child: CustomPaint(painter: WorldPainter(w, zoom, repaint: _frame))),
             Positioned.fill(
-              child: CustomPaint(painter: WorldPainter(w, zoom, repaint: _frame)),
+              child: ListenableBuilder(listenable: _frame, builder: (context, _) => _hud(context)),
             ),
-            Positioned.fill(
-              child: ListenableBuilder(
-                listenable: _frame,
-                builder: (context, _) => _hud(context),
+            if (_overlay == _Overlay.station && w.nearbyStation != null)
+              Positioned.fill(
+                child: StationPanel(
+                  world: w,
+                  station: w.nearbyStation!,
+                  frame: _frame,
+                  act: _act,
+                  onClose: () => _setOverlay(_Overlay.none),
+                  onOpenShop: () => _openShop(),
+                ),
               ),
-            ),
-            if (_panelOpen && w.nearbyStation != null)
-              Positioned.fill(child: _stationPanel(w.nearbyStation!)),
-            if (_menuOpen) Positioned.fill(child: _pauseMenu()),
+            if (_overlay == _Overlay.merchant && w.nearbyMerchant != null)
+              Positioned.fill(
+                child: MerchantPanel(
+                  world: w,
+                  event: w.nearbyMerchant!,
+                  frame: _frame,
+                  act: _act,
+                  onClose: () => _setOverlay(_Overlay.none),
+                ),
+              ),
+            if (_overlay == _Overlay.pause) Positioned.fill(child: _pauseMenu()),
           ],
         ),
       ),
     );
   }
 
-  // ---------------- HUD ----------------
   Widget _hud(BuildContext context) {
     final p = w.player;
+    final narrow = MediaQuery.sizeOf(context).width < 720;
     return SafeArea(
       child: Stack(
         children: [
-          // 상단 좌측: 선장 정보
-          Positioned(
-            left: 8,
-            top: 8,
-            child: _glass(
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const ChibiPortrait(style: ChibiStyle.captain, size: 54),
-                  const SizedBox(width: 8),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _hpBar(p.hp / w.playerMaxHp),
-                      const SizedBox(height: 4),
-                      _res('💰', w.credits, w.creditIncome),
-                      _res('💎', w.ore, w.oreIncome),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          // 상단 우측: 미니맵
-          Positioned(
-            right: 8,
-            top: 8,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _glass(Text(
-                      '⚠ 위협 ${w.threat.toStringAsFixed(1)}  🏛 ${w.empireValue}',
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                    )),
-                    const SizedBox(width: 6),
-                    _iconBtn(Icons.pause, () => setState(() => _menuOpen = true)),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                SizedBox(
-                  width: 120,
-                  height: 120,
-                  child: CustomPaint(painter: MinimapPainter(w, repaint: _frame)),
-                ),
-              ],
-            ),
-          ),
-          // 대사
+          Positioned(left: 8, top: 8, child: _captainCard()),
+          Positioned(right: 8, top: 8, child: _rightColumn()),
           if (w.dialogs.isNotEmpty)
             Positioned(
-              top: 80,
-              left: 0,
-              right: 0,
+              top: narrow ? 230 : 70,
+              left: narrow ? 8 : 240,
+              right: narrow ? 8 : 150,
               child: Center(child: _dialog(w.dialogs.last)),
             ),
-          if (!p.alive)
-            Center(
-              child: _glass(Text(
-                '💥 격추당했습니다!\n${max(0, p.respawnTimer).toStringAsFixed(1)}초 후 재출격',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white, fontSize: 20),
-              )),
+          if (!p.alive) Positioned.fill(child: _reviveOverlay()),
+          if (p.alive) ...[
+            Positioned(left: 20, bottom: 20, child: _joystick()),
+            Positioned(right: 16, bottom: 16, child: _combatButtons()),
+            Positioned(
+              left: 8,
+              right: 8,
+              bottom: narrow ? 200 : 150,
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 8,
+                children: _contextActions(),
+              ),
             ),
-          // 하단 좌측: 조이스틱
-          Positioned(left: 20, bottom: 20, child: _joystick()),
-          // 하단 우측: 사격
-          Positioned(right: 20, bottom: 20, child: _fireButton()),
-          // 하단 중앙: 상황별 행동
-          Positioned(
-            left: 8,
-            right: 8,
-            bottom: 160,
-            child: Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 8,
-              runSpacing: 8,
-              children: _contextActions(),
-            ),
-          ),
+          ],
         ],
       ),
     );
   }
 
+  Widget _captainCard() {
+    final p = w.player;
+    final (sv, st) = w.storyProgress;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        glass(Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ChibiPortrait(style: ChibiStyle.captainIn(outfitById(w.profile.outfit)), size: 54),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _hpBar(p.hp / w.playerMaxHp),
+                const SizedBox(height: 3),
+                _res('💰', w.credits, w.creditIncome),
+                _res('💎', w.ore, w.oreIncome),
+                GestureDetector(
+                  onTap: () => _openShop(),
+                  child: Text('⭐ ${w.profile.gems}  ＋',
+                      style: const TextStyle(color: Color(0xFFFF80AB), fontSize: 13)),
+                ),
+              ],
+            ),
+          ],
+        )),
+        const SizedBox(height: 6),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 230),
+          child: glass(Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('🎯 ${w.story.title}',
+                  style: const TextStyle(color: Color(0xFF7CFFB2), fontSize: 12, fontWeight: FontWeight.bold)),
+              if (st > 1) Text('$sv / $st', style: dimStyle),
+              for (final m in w.activeMissions)
+                Text('${m.icon} ${_missionShort(m)}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                    overflow: TextOverflow.ellipsis),
+              if (w.buffs.isNotEmpty)
+                Text(w.buffs.entries.map((e) => '${e.key.icon}${e.value.ceil()}s').join('  '),
+                    style: const TextStyle(color: Color(0xFFB9F6CA), fontSize: 12)),
+            ],
+          )),
+        ),
+      ],
+    );
+  }
+
+  String _missionShort(Mission m) => switch (m.type) {
+        MissionType.kill || MissionType.mine =>
+          '${m.title(w.planets)} ${min(m.progress, m.target)}/${m.target}',
+        _ => m.title(w.planets),
+      };
+
+  Widget _rightColumn() => Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              glass(Text(
+                '${w.sectorName}\n⚠ 위협 ${w.threat.toStringAsFixed(1)}  🏛 ${compact(w.empireValue)}',
+                textAlign: TextAlign.right,
+                style: const TextStyle(color: Colors.white, fontSize: 11),
+              )),
+              const SizedBox(width: 6),
+              Badge(
+                isLabelVisible: w.profile.claimable.isNotEmpty,
+                smallSize: 10,
+                child: _iconBtn(Icons.menu, () => _setOverlay(_Overlay.pause)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          SizedBox(
+            width: 120,
+            height: 120,
+            child: CustomPaint(painter: MinimapPainter(w, repaint: _frame)),
+          ),
+          for (final ev in w.events)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: glass(
+                Text('${ev.title} ${ev.timeLeft.ceil()}s',
+                    style: const TextStyle(color: Color(0xFFFFD740), fontSize: 11)),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              ),
+            ),
+        ],
+      );
+
   List<Widget> _contextActions() {
     final out = <Widget>[];
+    final merchant = w.nearbyMerchant;
     final st = w.nearbyStation;
+    final gate = w.nearbyGate;
     final pl = w.nearbyPlanet;
+    if (merchant != null) {
+      out.add(actionBtn('🛒 상인과 거래 (E)', true, () => _setOverlay(_Overlay.merchant),
+          color: const Color(0xFF00897B)));
+    }
     if (st != null) {
-      out.add(_actionBtn('🛠 ${st.name} 메뉴 (E)', true,
-          () => setState(() => _panelOpen = true)));
+      out.add(actionBtn('🛠 ${st.name} (E)', true, () => _setOverlay(_Overlay.station)));
+    }
+    if (gate != null) {
+      out.add(w.gateOpen(gate)
+          ? actionBtn(gate.forward ? '🌀 다음 섹터로 워프 (E)' : '🌀 이전 섹터로 (E)', true,
+              () => _act(() => w.warp(gate)),
+              color: const Color(0xFF6A1B9A))
+          : actionBtn('🔒 섹터 두목을 쓰러뜨려야 열려요', false, null));
     }
     if (pl != null) {
       if (pl.colonyLevel >= Planet.maxLevel) {
-        out.add(_actionBtn('🌟 ${pl.name} 최대 레벨', false, null));
+        out.add(actionBtn('🌟 ${pl.name} 최대 레벨', false, null));
       } else {
-        final c = pl.nextCost;
+        final c = w.planetCost(pl);
         final label = pl.colonyLevel == 0
-            ? '🚩 ${pl.name} 정착 ${_cost(c)} (E)'
-            : '⬆ ${pl.name} Lv.${pl.colonyLevel + 1} ${_cost(c)} (E)';
-        out.add(_actionBtn(label, w.canAfford(c), () => _act(() => w.upgradePlanet(pl))));
+            ? '🚩 ${pl.name} 정착 ${costText(c)} (E)'
+            : '⬆ ${pl.name} Lv.${pl.colonyLevel + 1} ${costText(c)} (E)';
+        out.add(actionBtn(label, w.canAfford(c), () => _act(() => w.upgradePlanet(pl))));
       }
-      out.add(_glass(Text(
-        '${pl.kindLabel} · 레벨당 💰${pl.ratePerLevel.$1}/s'
-        '${pl.ratePerLevel.$2 > 0 ? ' 💎${pl.ratePerLevel.$2}/s' : ''}',
+      final (cr, orr) = pl.ratePerLevel;
+      out.add(glass(Text(
+        '${pl.kindLabel} · 레벨당 💰${(cr * w.sectorMul).toStringAsFixed(1)}/s'
+        '${orr > 0 ? ' 💎${(orr * w.sectorMul).toStringAsFixed(1)}/s' : ''}',
         style: const TextStyle(color: Colors.white70, fontSize: 11),
       )));
     }
-    if (w.canBuildStationHere) {
+    if (w.canBuildStationHere && (w.counter('colonies') > 0 || w.credits >= w.stationBuildCost.$1)) {
       final c = w.stationBuildCost;
-      out.add(_actionBtn('🏗 정거장 건설 ${_cost(c)} (B)', w.canAfford(c),
-          () => _act(w.buildStation)));
+      out.add(actionBtn('🏗 정거장 건설 ${costText(c)} (B)', w.canAfford(c), () => _act(w.buildStation)));
     }
     return out;
   }
 
-  String _cost((int, int) c) => c.$2 > 0 ? '💰${c.$1} 💎${c.$2}' : '💰${c.$1}';
-
   Widget _joystick() {
-    const radius = 60.0;
+    const radius = 62.0;
     return Listener(
       onPointerDown: (e) => _updateStick(e.localPosition, radius),
       onPointerMove: (e) => _updateStick(e.localPosition, radius),
@@ -312,8 +500,8 @@ class _GameScreenState extends State<GameScreen>
           child: Transform.translate(
             offset: _stick * (radius - 20),
             child: Container(
-              width: 44,
-              height: 44,
+              width: 46,
+              height: 46,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: const Color(0xFF42A5F5).withValues(alpha: 0.7),
@@ -329,37 +517,121 @@ class _GameScreenState extends State<GameScreen>
     _stick = ((local - Offset(radius, radius)) / (radius - 20)).clampLength(1);
   }
 
-  Widget _fireButton() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        GestureDetector(
-          onTap: () => setState(() => _autoFire = !_autoFire),
-          child: _glass(Text(_autoFire ? '자동사격 ON' : '자동사격 OFF',
-              style: TextStyle(
-                  color: _autoFire ? const Color(0xFF7CFFB2) : Colors.white60,
-                  fontSize: 12))),
-        ),
-        const SizedBox(height: 10),
-        Listener(
-          onPointerDown: (_) => _touchFire = true,
-          onPointerUp: (_) => _touchFire = false,
-          onPointerCancel: (_) => _touchFire = false,
-          child: Container(
-            width: 90,
-            height: 90,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: (_touchFire ? const Color(0xFFFF5252) : const Color(0xFFE53935))
-                  .withValues(alpha: 0.55),
-              border: Border.all(color: Colors.white38, width: 2),
+  Widget _combatButtons() {
+    final p = w.player;
+    return SizedBox(
+      width: 190,
+      height: 200,
+      child: Stack(
+        children: [
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: Listener(
+              onPointerDown: (_) => _touchFire = true,
+              onPointerUp: (_) => _touchFire = false,
+              onPointerCancel: (_) => _touchFire = false,
+              child: Container(
+                width: 92,
+                height: 92,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: (_touchFire ? const Color(0xFFFF5252) : const Color(0xFFE53935))
+                      .withValues(alpha: 0.55),
+                  border: Border.all(color: Colors.white38, width: 2),
+                ),
+                child: const Center(
+                    child: Text('발사', style: TextStyle(color: Colors.white, fontSize: 18))),
+              ),
             ),
-            child: const Center(
-              child: Text('발사', style: TextStyle(color: Colors.white, fontSize: 18)),
+          ),
+          Positioned(
+            right: 104,
+            bottom: 0,
+            child: _skillBtn('💨', p.boostCooldown, w.boostCooldownMax, true, w.boost),
+          ),
+          Positioned(
+            right: 96,
+            bottom: 66,
+            child: _skillBtn('🚀', p.missileCooldown, w.missileCooldownMax,
+                w.level(UpgradeKind.missile) > 0, w.fireMissiles),
+          ),
+          Positioned(
+            right: 28,
+            bottom: 104,
+            child: _skillBtn('🛡', p.shieldCooldown, w.shieldCooldownMax,
+                w.level(UpgradeKind.shield) > 0, w.activateShield),
+          ),
+          Positioned(
+            right: 0,
+            top: 0,
+            child: GestureDetector(
+              onTap: () => setState(() => _autoFire = !_autoFire),
+              child: glass(
+                Text(_autoFire ? '자동 ON' : '자동 OFF',
+                    style: TextStyle(
+                        color: _autoFire ? const Color(0xFF7CFFB2) : Colors.white60, fontSize: 11)),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _skillBtn(String icon, double cd, double cdMax, bool unlocked, bool Function() use) {
+    final f = cdMax <= 0 ? 0.0 : (cd / cdMax).clamp(0.0, 1.0);
+    return Listener(
+      onPointerDown: (_) {
+        if (!unlocked) {
+          w.say(Speaker.advisor, '정거장 함선 개조에서 장착할 수 있어요!');
+          return;
+        }
+        if (use()) AppState.haptic();
+      },
+      child: SizedBox(
+        width: 56,
+        height: 56,
+        child: CustomPaint(
+          painter: _CooldownPainter(f, unlocked),
+          child: Center(
+            child: Opacity(
+              opacity: unlocked ? 1 : 0.35,
+              child: Text(unlocked ? icon : '🔒', style: const TextStyle(fontSize: 22)),
             ),
           ),
         ),
-      ],
+      ),
+    );
+  }
+
+  Widget _reviveOverlay() {
+    final p = w.player;
+    if (!p.awaitingRevive) return const SizedBox();
+    final premium = w.profile.premium;
+    return Container(
+      color: Colors.black45,
+      alignment: Alignment.center,
+      child: glass(
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ChibiPortrait(style: ChibiStyle.pirate, size: 80),
+            const Text('💥 격추당했습니다!', style: TextStyle(color: Colors.white, fontSize: 22)),
+            Text('${max(0, 20 - p.deadTime).ceil()}초 뒤 기지에서 자동 재출격', style: dimStyle),
+            const SizedBox(height: 12),
+            actionBtn(premium ? '👑 이 자리에서 부활 (무료)' : '📺 광고 보고 이 자리에서 부활', true, _reviveWithAd,
+                color: const Color(0xFF00897B)),
+            const SizedBox(height: 8),
+            actionBtn('⭐10 으로 이 자리에서 부활', true, _reviveWithGems, color: const Color(0xFFAD1457)),
+            const SizedBox(height: 8),
+            actionBtn('🏠 기지에서 재출격 (크레딧 25% 손실)', true, w.respawnAtBase,
+                color: const Color(0xFF455A64)),
+          ],
+        ),
+        padding: const EdgeInsets.all(20),
+      ),
     );
   }
 
@@ -368,16 +640,20 @@ class _GameScreenState extends State<GameScreen>
       Speaker.captain => '선장',
       Speaker.pirate => '해적',
       Speaker.advisor => '부관 미나',
+      Speaker.merchant => '상인 냥냥',
     };
     return Opacity(
       opacity: d.time.clamp(0.0, 0.5) * 2,
-      child: _glass(
+      child: glass(
         ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
+          constraints: const BoxConstraints(maxWidth: 440),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ChibiPortrait(style: ChibiStyle.of(d.speaker), size: 48),
+              ChibiPortrait(
+                  style: ChibiStyle.of(d.speaker,
+                      captainStyle: ChibiStyle.captainIn(outfitById(w.profile.outfit))),
+                  size: 48),
               const SizedBox(width: 8),
               Flexible(
                 child: Column(
@@ -386,13 +662,10 @@ class _GameScreenState extends State<GameScreen>
                   children: [
                     Text(name,
                         style: TextStyle(
-                            color: d.speaker == Speaker.pirate
-                                ? const Color(0xFFFF8A80)
-                                : const Color(0xFF8AD8FF),
+                            color: d.speaker == Speaker.pirate ? const Color(0xFFFF8A80) : kSky,
                             fontWeight: FontWeight.bold,
                             fontSize: 12)),
-                    Text(d.text,
-                        style: const TextStyle(color: Colors.white, fontSize: 14)),
+                    Text(d.text, style: bodyStyle),
                   ],
                 ),
               ),
@@ -417,18 +690,8 @@ class _GameScreenState extends State<GameScreen>
       );
 
   Widget _res(String icon, double v, double rate) => Text(
-        '$icon ${v.floor()}${rate > 0 ? '  (+${rate.toStringAsFixed(1)}/s)' : ''}',
+        '$icon ${compact(v)}${rate > 0 ? '  +${rate.toStringAsFixed(1)}/s' : ''}',
         style: const TextStyle(color: Colors.white, fontSize: 13),
-      );
-
-  Widget _glass(Widget child) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: const Color(0xCC0D0B26),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0x557E57C2)),
-        ),
-        child: child,
       );
 
   Widget _iconBtn(IconData icon, VoidCallback onTap) => Material(
@@ -441,156 +704,76 @@ class _GameScreenState extends State<GameScreen>
         ),
       );
 
-  Widget _actionBtn(String label, bool enabled, VoidCallback? onTap) => ElevatedButton(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF5E35B1),
-          foregroundColor: Colors.white,
-          disabledBackgroundColor: const Color(0xFF37305A),
-          disabledForegroundColor: Colors.white54,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        ),
-        onPressed: enabled ? onTap : null,
-        child: Text(label, style: const TextStyle(fontSize: 13)),
-      );
-
-  // ---------------- 정거장 메뉴 ----------------
-  Widget _stationPanel(Station s) {
-    Widget row(String title, String desc, int level, int maxLv, (int, int) cost,
-        bool Function() buy) {
-      final maxed = level >= maxLv;
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
+  Widget _pauseMenu() => OverlayPanel(
+        onClose: () => _setOverlay(_Overlay.none),
+        maxWidth: 420,
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.all(20),
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('$title  Lv.$level',
-                      style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold)),
-                  Text(desc,
-                      style: const TextStyle(color: Colors.white60, fontSize: 12)),
-                ],
+            const Text('일시정지', style: titleStyle, textAlign: TextAlign.center),
+            const SizedBox(height: 6),
+            Text(
+              '${w.sectorName} · 격추 ${w.counter('kills')} · 승무원 ${w.roster.length}\n'
+              '정착 ${w.counter('colonies')} · 정거장 ${w.stations.length} · 임무 완료 ${w.counter('missions')}',
+              style: dimStyle,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            actionBtn('▶ 계속하기', true, () => _setOverlay(_Overlay.none)),
+            const SizedBox(height: 8),
+            actionBtn('⭐ 상점', true, () => _openShop(), color: const Color(0xFFAD1457)),
+            const SizedBox(height: 8),
+            Badge(
+              isLabelVisible: w.profile.claimable.isNotEmpty,
+              label: Text('${w.profile.claimable.length}'),
+              child: SizedBox(
+                width: double.infinity,
+                child: actionBtn('🏆 업적', true, () => _modalRoute(const AchievementsScreen())),
               ),
             ),
-            _actionBtn(maxed ? 'MAX' : _cost(cost), !maxed && w.canAfford(cost),
-                () => _act(buy)),
-          ],
-        ),
-      );
-    }
-
-    return GestureDetector(
-      onTap: () => setState(() => _panelOpen = false),
-      child: Container(
-        color: Colors.black54,
-        alignment: Alignment.center,
-        child: GestureDetector(
-          onTap: () {},
-          child: ListenableBuilder(
-            listenable: _frame,
-            builder: (context, _) => Container(
-              margin: const EdgeInsets.all(16),
-              padding: const EdgeInsets.all(16),
-              constraints: const BoxConstraints(maxWidth: 520, maxHeight: 560),
-              decoration: BoxDecoration(
-                color: const Color(0xF0151236),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFF7E57C2)),
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const ChibiPortrait(style: ChibiStyle.advisor, size: 60),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(s.name,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold)),
-                              Text(
-                                  '보유 💰${w.credits.floor()}  💎${w.ore.floor()}\n'
-                                  '총 수입 💰${w.creditIncome.toStringAsFixed(1)}/s  '
-                                  '💎${w.oreIncome.toStringAsFixed(1)}/s',
-                                  style: const TextStyle(
-                                      color: Colors.white70, fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close, color: Colors.white),
-                          onPressed: () => setState(() => _panelOpen = false),
-                        ),
-                      ],
-                    ),
-                    const Divider(color: Colors.white24),
-                    const Text('🚀 함선 개조',
-                        style: TextStyle(color: Color(0xFF8AD8FF), fontSize: 16)),
-                    row('무기', '공격력 ${w.playerDamage.toInt()} · 3/6레벨에 다연발',
-                        w.weaponLevel, GameWorld.upgradeMax,
-                        w.upgradeCost(UpgradeKind.weapon),
-                        () => w.upgradeShip(UpgradeKind.weapon)),
-                    row('장갑', '최대 체력 ${w.playerMaxHp.toInt()}', w.hullLevel,
-                        GameWorld.upgradeMax, w.upgradeCost(UpgradeKind.hull),
-                        () => w.upgradeShip(UpgradeKind.hull)),
-                    row('엔진', '최고 속도 ${w.playerSpeed.toInt()}', w.engineLevel,
-                        GameWorld.upgradeMax, w.upgradeCost(UpgradeKind.engine),
-                        () => w.upgradeShip(UpgradeKind.engine)),
-                    const Divider(color: Colors.white24),
-                    const Text('🛰 정거장 확장',
-                        style: TextStyle(color: Color(0xFF8AD8FF), fontSize: 16)),
-                    row('거주구역', '수입 💰${s.creditRate.toStringAsFixed(0)}/s · 내구도 ${s.maxHp.toInt()}',
-                        s.habitatLevel, Station.maxLevel, s.habitatCost,
-                        () => w.upgradeHabitat(s)),
-                    row('방어포탑',
-                        s.turretLevel == 0
-                            ? '해적을 자동으로 요격해요'
-                            : '피해 ${s.turretDamage.toInt()} · 사거리 ${s.turretRange.toInt()}',
-                        s.turretLevel, Station.maxLevel, s.turretCost,
-                        () => w.upgradeTurret(s)),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _pauseMenu() => Container(
-        color: Colors.black87,
-        alignment: Alignment.center,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('일시정지',
-                style: TextStyle(color: Colors.white, fontSize: 28)),
             const SizedBox(height: 8),
-            Text('격추 ${w.kills} · 식민지 ${w.colonyCount} · 정거장 ${w.stations.length}',
-                style: const TextStyle(color: Colors.white70)),
+            actionBtn('⚙ 설정', true, () => _modalRoute(const SettingsScreen()),
+                color: const Color(0xFF455A64)),
             const SizedBox(height: 8),
-            const Text(
-              '조작: WASD/방향키 이동 · Space 사격 · E 상호작용 · B 정거장 건설',
-              style: TextStyle(color: Colors.white54, fontSize: 12),
-            ),
-            const SizedBox(height: 20),
-            _actionBtn('계속하기', true, () => setState(() => _menuOpen = false)),
-            const SizedBox(height: 8),
-            _actionBtn('저장하고 타이틀로', true, () async {
+            actionBtn('💾 저장하고 타이틀로', true, () async {
               await SaveService.save(w);
               if (mounted) Navigator.of(context).pop();
-            }),
+            }, color: const Color(0xFF455A64)),
+            const SizedBox(height: 16),
+            const Text(
+              '키보드: WASD 이동 · Space 사격 · Q 미사일 · F 실드 · Shift 부스트\nE 상호작용 · B 정거장 건설 · Esc 메뉴',
+              style: dimStyle,
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       );
+}
+
+class _CooldownPainter extends CustomPainter {
+  _CooldownPainter(this.fraction, this.unlocked);
+  final double fraction;
+  final bool unlocked;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = size.shortestSide / 2;
+    canvas.drawCircle(c, r, Paint()..color = const Color(0x881A237E));
+    canvas.drawCircle(
+        c,
+        r - 1,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          ..color = unlocked && fraction == 0 ? const Color(0xFF80D8FF) : Colors.white24);
+    if (fraction > 0) {
+      canvas.drawArc(Rect.fromCircle(center: c, radius: r), -pi / 2, 2 * pi * fraction, true,
+          Paint()..color = const Color(0xAA000000));
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CooldownPainter old) => old.fraction != fraction || old.unlocked != unlocked;
 }

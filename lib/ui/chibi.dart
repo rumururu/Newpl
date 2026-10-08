@@ -2,6 +2,8 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import '../game/cosmetics.dart';
+import '../game/crew.dart';
 import '../game/models.dart';
 
 /// 머리 큰 치비 캐릭터 스타일
@@ -15,6 +17,7 @@ class ChibiStyle {
     this.bandana,
     this.helmet = false,
     this.glasses = false,
+    this.accessory = Accessory.none,
   });
 
   final Color skin;
@@ -25,6 +28,42 @@ class ChibiStyle {
   final Color? bandana;
   final bool helmet;
   final bool glasses;
+  final Accessory accessory;
+
+  ChibiStyle copyWith({Color? hair, Color? suit, bool? helmet, Accessory? accessory}) =>
+      ChibiStyle(
+        skin: skin,
+        hair: hair ?? this.hair,
+        suit: suit ?? this.suit,
+        eye: eye,
+        eyePatch: eyePatch,
+        bandana: bandana,
+        helmet: helmet ?? this.helmet,
+        glasses: glasses,
+        accessory: accessory ?? this.accessory,
+      );
+
+  /// 꾸미기 의상을 입은 선장
+  static ChibiStyle captainIn(CaptainOutfit o) =>
+      captain.copyWith(
+          suit: o.suit, hair: o.hair, accessory: o.accessory, helmet: o.accessory == Accessory.none);
+
+  static ChibiStyle forCrew(CrewMember c) => ChibiStyle(
+        skin: Color(c.skinColor),
+        hair: Color(c.hairColor),
+        suit: Color(c.role.suitColor),
+        eye: const Color(0xFF263238),
+        glasses: c.glasses,
+        accessory: c.accessory,
+      );
+
+  static const merchant = ChibiStyle(
+    skin: Color(0xFFFFE0C7),
+    hair: Color(0xFFFF9800),
+    suit: Color(0xFF00897B),
+    eye: Color(0xFF3E2723),
+    accessory: Accessory.catEars,
+  );
 
   static const captain = ChibiStyle(
     skin: Color(0xFFFFE0C7),
@@ -51,10 +90,11 @@ class ChibiStyle {
     glasses: true,
   );
 
-  static ChibiStyle of(Speaker s) => switch (s) {
-        Speaker.captain => captain,
+  static ChibiStyle of(Speaker s, {ChibiStyle? captainStyle}) => switch (s) {
+        Speaker.captain => captainStyle ?? captain,
         Speaker.pirate => pirate,
         Speaker.advisor => advisor,
+        Speaker.merchant => merchant,
       };
 }
 
@@ -89,6 +129,9 @@ void paintChibi(Canvas canvas, Offset center, double r, ChibiStyle st,
     fill.color = const Color(0xFFFFD54F);
     canvas.drawCircle(center + Offset(-r * 0.2, r * 1.1), r * 0.1, fill);
   }
+
+  // 귀 장식 (머리 뒤)
+  _paintEars(canvas, center, r, st);
 
   // 뒷머리
   fill.color = st.hair;
@@ -207,6 +250,8 @@ void paintChibi(Canvas canvas, Offset center, double r, ChibiStyle st,
         0.2, pi - 0.4, false, mouth);
   }
 
+  _paintTopAccessory(canvas, center, r, st);
+
   // 우주 헬멧 (유리)
   if (st.helmet) {
     final glass = Paint()
@@ -225,6 +270,105 @@ void paintChibi(Canvas canvas, Offset center, double r, ChibiStyle st,
     canvas.drawArc(
         Rect.fromCircle(center: center + Offset(0, r * 0.05), radius: r * 1.05),
         pi * 1.1, pi * 0.3, false, shine);
+  }
+}
+
+void _paintEars(Canvas canvas, Offset c, double r, ChibiStyle st) {
+  final p = Paint()..isAntiAlias = true;
+  switch (st.accessory) {
+    case Accessory.catEars:
+      for (final sx in [-1.0, 1.0]) {
+        final path = Path()
+          ..moveTo(c.dx + sx * r * 0.95, c.dy - r * 0.35)
+          ..lineTo(c.dx + sx * r * 0.85, c.dy - r * 1.45)
+          ..lineTo(c.dx + sx * r * 0.25, c.dy - r * 0.95)
+          ..close();
+        p.color = st.hair;
+        canvas.drawPath(path, p);
+        final inner = Path()
+          ..moveTo(c.dx + sx * r * 0.8, c.dy - r * 0.6)
+          ..lineTo(c.dx + sx * r * 0.8, c.dy - r * 1.2)
+          ..lineTo(c.dx + sx * r * 0.42, c.dy - r * 0.92)
+          ..close();
+        p.color = const Color(0xFFFFAB91);
+        canvas.drawPath(inner, p);
+      }
+    case Accessory.bunnyEars:
+      for (final sx in [-1.0, 1.0]) {
+        final rect = Rect.fromCenter(
+            center: Offset(c.dx + sx * r * 0.45, c.dy - r * 1.55),
+            width: r * 0.45,
+            height: r * 1.3);
+        canvas.save();
+        canvas.translate(rect.center.dx, rect.center.dy);
+        canvas.rotate(sx * 0.2);
+        canvas.translate(-rect.center.dx, -rect.center.dy);
+        p.color = Colors.white;
+        canvas.drawOval(rect, p);
+        p.color = const Color(0xFFF8BBD0);
+        canvas.drawOval(rect.deflate(r * 0.1), p);
+        canvas.restore();
+      }
+    default:
+      break;
+  }
+}
+
+void _paintTopAccessory(Canvas canvas, Offset c, double r, ChibiStyle st) {
+  final p = Paint()..isAntiAlias = true;
+  switch (st.accessory) {
+    case Accessory.crown:
+      final path = Path()
+        ..moveTo(c.dx - r * 0.55, c.dy - r * 0.85)
+        ..lineTo(c.dx - r * 0.6, c.dy - r * 1.45)
+        ..lineTo(c.dx - r * 0.3, c.dy - r * 1.15)
+        ..lineTo(c.dx, c.dy - r * 1.55)
+        ..lineTo(c.dx + r * 0.3, c.dy - r * 1.15)
+        ..lineTo(c.dx + r * 0.6, c.dy - r * 1.45)
+        ..lineTo(c.dx + r * 0.55, c.dy - r * 0.85)
+        ..close();
+      p.color = const Color(0xFFFFD54F);
+      canvas.drawPath(path, p);
+      p.color = const Color(0xFFE91E63);
+      canvas.drawCircle(Offset(c.dx, c.dy - r * 1.08), r * 0.1, p);
+      p.color = const Color(0xFF29B6F6);
+      canvas.drawCircle(Offset(c.dx - r * 0.35, c.dy - r * 1.0), r * 0.07, p);
+      canvas.drawCircle(Offset(c.dx + r * 0.35, c.dy - r * 1.0), r * 0.07, p);
+    case Accessory.captainHat:
+      p.color = const Color(0xFF263238);
+      canvas.drawOval(
+          Rect.fromCenter(center: Offset(c.dx, c.dy - r * 0.85), width: r * 2.3, height: r * 0.5), p);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromCenter(center: Offset(c.dx, c.dy - r * 1.2), width: r * 1.5, height: r * 0.75),
+              Radius.circular(r * 0.3)),
+          p);
+      p.color = const Color(0xFFFFD54F);
+      canvas.drawRect(
+          Rect.fromCenter(center: Offset(c.dx, c.dy - r * 0.95), width: r * 1.5, height: r * 0.12), p);
+      canvas.drawCircle(Offset(c.dx, c.dy - r * 1.25), r * 0.16, p);
+    case Accessory.antenna:
+      final stroke = Paint()
+        ..color = const Color(0xFF2E7D32)
+        ..strokeWidth = r * 0.08
+        ..style = PaintingStyle.stroke;
+      for (final sx in [-1.0, 1.0]) {
+        final tip = Offset(c.dx + sx * r * 0.6, c.dy - r * 1.7);
+        canvas.drawLine(Offset(c.dx + sx * r * 0.3, c.dy - r * 0.95), tip, stroke);
+        p.color = const Color(0xFFB2FF59);
+        canvas.drawCircle(tip, r * 0.16, p);
+      }
+    case Accessory.flower:
+      final fc = Offset(c.dx + r * 0.65, c.dy - r * 0.75);
+      p.color = const Color(0xFFF48FB1);
+      for (var i = 0; i < 5; i++) {
+        final a = i * 2 * pi / 5;
+        canvas.drawCircle(fc + Offset(cos(a), sin(a)) * r * 0.18, r * 0.14, p);
+      }
+      p.color = const Color(0xFFFFEB3B);
+      canvas.drawCircle(fc, r * 0.1, p);
+    default:
+      break;
   }
 }
 
@@ -250,8 +394,8 @@ class _ChibiPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final r = size.shortestSide * 0.3;
-    paintChibi(canvas, Offset(size.width / 2, size.height * 0.4), r, style,
+    final r = size.shortestSide * 0.27;
+    paintChibi(canvas, Offset(size.width / 2, size.height * 0.46), r, style,
         blink: blink);
   }
 

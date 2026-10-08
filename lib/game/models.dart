@@ -26,6 +26,8 @@ double angleDiff(double a, double b) {
   return d;
 }
 
+typedef Cost = (int credits, int ore);
+
 class PlayerShip {
   Offset pos = Offset.zero;
   Offset vel = Offset.zero;
@@ -35,15 +37,23 @@ class PlayerShip {
   double invulnerable = 0;
   bool thrusting = false;
   bool alive = true;
-  double respawnTimer = 0;
+
+  /// 격추 후 부활 방식 선택 대기 중
+  bool awaitingRevive = false;
+  double deadTime = 0;
+  Offset deathPos = Offset.zero;
+
+  double missileCooldown = 0;
+  double shieldCooldown = 0;
+  double boostCooldown = 0;
+  double shieldTime = 0;
 }
 
-enum PirateKind { scout, raider, boss }
+enum PirateKind { scout, raider, bomber, sniper, boss, jelly }
 
 class Pirate {
-  Pirate(this.kind, this.pos, this.hp)
-      : maxHp = hp,
-        wanderAngle = 0;
+  Pirate(this.kind, this.pos, this.hp, {this.name, this.dmgScale = 1})
+      : maxHp = hp;
 
   final PirateKind kind;
   Offset pos;
@@ -51,59 +61,110 @@ class Pirate {
   double angle = 0;
   double hp;
   final double maxHp;
+  final double dmgScale;
   double fireCooldown = 1.5;
-  double wanderAngle;
+  double wanderAngle = 0;
   double hitFlash = 0;
+  double contactCooldown = 0;
+
+  /// 현상수배범 / 섹터 두목 이름
+  final String? name;
+  bool sectorBoss = false;
+  int? missionId;
+  int? eventId;
+
+  bool get isPirate => kind != PirateKind.jelly;
+  bool get isBossLike => kind == PirateKind.boss;
 
   double get radius => switch (kind) {
         PirateKind.scout => 18,
         PirateKind.raider => 24,
+        PirateKind.bomber => 20,
+        PirateKind.sniper => 20,
         PirateKind.boss => 46,
-      };
+        PirateKind.jelly => 34,
+      } *
+      (name != null && kind != PirateKind.boss ? 1.3 : 1);
 
   double get speed => switch (kind) {
         PirateKind.scout => 290,
         PirateKind.raider => 210,
+        PirateKind.bomber => 330,
+        PirateKind.sniper => 190,
         PirateKind.boss => 150,
+        PirateKind.jelly => 60,
       };
 
-  double get damage => switch (kind) {
+  double get damage =>
+      dmgScale *
+      switch (kind) {
         PirateKind.scout => 6,
         PirateKind.raider => 10,
+        PirateKind.bomber => 34,
+        PirateKind.sniper => 22,
         PirateKind.boss => 16,
+        PirateKind.jelly => 9,
       };
 
   double get fireInterval => switch (kind) {
         PirateKind.scout => 1.1,
         PirateKind.raider => 1.4,
+        PirateKind.bomber => 99,
+        PirateKind.sniper => 2.6,
         PirateKind.boss => 0.9,
+        PirateKind.jelly => 99,
       };
 
   int get bounty => switch (kind) {
         PirateKind.scout => 25,
         PirateKind.raider => 50,
+        PirateKind.bomber => 40,
+        PirateKind.sniper => 60,
         PirateKind.boss => 400,
+        PirateKind.jelly => 30,
+      };
+
+  static double baseHp(PirateKind k) => switch (k) {
+        PirateKind.scout => 30,
+        PirateKind.raider => 70,
+        PirateKind.bomber => 35,
+        PirateKind.sniper => 45,
+        PirateKind.boss => 450,
+        PirateKind.jelly => 120,
       };
 }
 
 class Bullet {
-  Bullet(this.pos, this.vel, this.damage, this.fromPlayer, {this.life = 1.2});
+  Bullet(this.pos, this.vel, this.damage, this.fromPlayer,
+      {this.life = 1.2, this.big = false});
   Offset pos;
   final Offset vel;
   final double damage;
   final bool fromPlayer;
+  final bool big;
   double life;
 }
 
+class Missile {
+  Missile(this.pos, this.vel, this.damage);
+  Offset pos;
+  Offset vel;
+  final double damage;
+  double life = 3.5;
+  Pirate? target;
+}
+
 class Asteroid {
-  Asteroid(this.pos, this.radius, int seed)
+  Asteroid(this.pos, this.radius, int seed, {this.crystal = false})
       : hp = radius * 1.5,
         rotation = 0,
         spin = (Random(seed).nextDouble() - 0.5) * 0.8,
         shape = List.generate(
             9, (i) => 0.75 + Random(seed + i * 31).nextDouble() * 0.35);
   Offset pos;
+  Offset drift = Offset.zero;
   final double radius;
+  final bool crystal;
   double hp;
   double rotation;
   final double spin;
@@ -111,11 +172,35 @@ class Asteroid {
   double hitFlash = 0;
 }
 
-enum PickupKind { credits, ore }
+enum PickupKind { credits, ore, gem, power }
+
+enum PowerUpKind { rapid, shield, magnet, doubleCredits }
+
+extension PowerUpInfo on PowerUpKind {
+  String get icon => switch (this) {
+        PowerUpKind.rapid => '⚡',
+        PowerUpKind.shield => '🛡',
+        PowerUpKind.magnet => '🧲',
+        PowerUpKind.doubleCredits => '💰',
+      };
+  String get label => switch (this) {
+        PowerUpKind.rapid => '연사',
+        PowerUpKind.shield => '실드',
+        PowerUpKind.magnet => '자석',
+        PowerUpKind.doubleCredits => '크레딧 2배',
+      };
+  double get duration => switch (this) {
+        PowerUpKind.rapid => 8,
+        PowerUpKind.shield => 6,
+        PowerUpKind.magnet => 15,
+        PowerUpKind.doubleCredits => 20,
+      };
+}
 
 class Pickup {
-  Pickup(this.kind, this.pos, this.amount, this.vel);
+  Pickup(this.kind, this.pos, this.amount, this.vel, {this.power});
   final PickupKind kind;
+  final PowerUpKind? power;
   Offset pos;
   Offset vel;
   final int amount;
@@ -133,6 +218,15 @@ class Particle {
   final double size;
 }
 
+class FloatText {
+  FloatText(this.pos, this.text, this.color, {this.big = false});
+  Offset pos;
+  final String text;
+  final Color color;
+  final bool big;
+  double life = 1.0;
+}
+
 enum PlanetKind { garden, desert, ice, lava, gas }
 
 class Planet {
@@ -142,6 +236,9 @@ class Planet {
   final double radius;
   final PlanetKind kind;
   int colonyLevel = 0;
+
+  /// 해적 습격 중이면 생산 중단
+  bool raided = false;
 
   static const maxLevel = 5;
 
@@ -162,10 +259,7 @@ class Planet {
         PlanetKind.gas => (4.0, 0.0),
       };
 
-  double get creditRate => ratePerLevel.$1 * colonyLevel;
-  double get oreRate => ratePerLevel.$2 * colonyLevel;
-
-  (int credits, int ore) get nextCost {
+  Cost baseCost() {
     final base = kind == PlanetKind.gas ? 220 : 150;
     return (
       (base * pow(1.8, colonyLevel)).round(),
@@ -186,18 +280,43 @@ class Station {
 
   static const maxLevel = 6;
   double get maxHp => 200 + habitatLevel * 100;
-  double get creditRate => habitatLevel * 2.0;
+  double get baseCreditRate => habitatLevel * 2.0;
   double get turretRange => 380 + turretLevel * 30;
   double get turretDamage => 6 + turretLevel * 4;
   double get turretInterval => 0.9 / (1 + turretLevel * 0.2);
 
-  (int, int) get habitatCost =>
+  Cost get habitatCost =>
       ((250 * pow(1.7, habitatLevel - 1)).round(), 60 * habitatLevel);
-  (int, int) get turretCost =>
+  Cost get turretCost =>
       ((200 * pow(1.7, turretLevel)).round(), 80 * (turretLevel + 1));
 }
 
-enum Speaker { captain, pirate, advisor }
+class WarpGate {
+  WarpGate(this.pos, this.forward);
+  final Offset pos;
+  final bool forward;
+}
+
+enum EventKind { raid, meteor, merchant, supply }
+
+class WorldEvent {
+  WorldEvent(this.id, this.kind, this.pos, this.timeLeft, {this.planet});
+  final int id;
+  final EventKind kind;
+  Offset pos;
+  double timeLeft;
+  final Planet? planet;
+  bool finished = false;
+
+  String get title => switch (kind) {
+        EventKind.raid => '🏴‍☠️ ${planet?.name ?? ''} 습격',
+        EventKind.meteor => '☄ 유성우',
+        EventKind.merchant => '🛒 떠돌이 상인',
+        EventKind.supply => '📦 보급 캡슐',
+      };
+}
+
+enum Speaker { captain, pirate, advisor, merchant }
 
 class DialogLine {
   DialogLine(this.speaker, this.text);
@@ -205,3 +324,5 @@ class DialogLine {
   final String text;
   double time = 4;
 }
+
+enum Sfx { shoot, hit, explode, bigExplode, pickup, coin, gem, upgrade, alarm, warp, missile, shield, boost, hurt }
