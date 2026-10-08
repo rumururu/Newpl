@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 
+import 'ads.dart';
+
 /// 인앱 상품 정의 (스토어 콘솔에 같은 ID로 등록해야 함)
 class ProductDef {
   const ProductDef(this.id, this.title, this.desc, this.fallbackPrice,
@@ -26,7 +28,7 @@ const productDefs = [
 
 /// 결제/광고 추상화.
 /// - 개발/웹: [DevMonetization] (테스트 확인창)
-/// - 출시: [StoreMonetization] (in_app_purchase). 보상형 광고 SDK는 docs/STORE_RELEASE.md 참고
+/// - 출시: [StoreMonetization] (in_app_purchase + AdMob 보상형 광고)
 abstract class MonetizationService {
   /// 결제 성공 시 호출 (상품 지급은 앱에서 처리)
   void Function(String productId)? onGrant;
@@ -73,9 +75,12 @@ class DevMonetization extends MonetizationService {
   Future<void> restore() async {}
 
   @override
-  Future<bool> showRewardedAd() async =>
-      await (confirm?.call('[테스트 광고]', '광고를 끝까지 본 것으로 처리할까요?') ??
-          Future.value(false));
+  Future<bool> showRewardedAd() async {
+    // 모바일에서는 구글 테스트 광고를 실제로 띄운다
+    if (AdService.supported) return AdService.instance.showRewarded();
+    return await (confirm?.call('[테스트 광고]', '광고를 끝까지 본 것으로 처리할까요?') ??
+        Future.value(false));
+  }
 }
 
 class StoreMonetization extends MonetizationService {
@@ -155,11 +160,7 @@ class StoreMonetization extends MonetizationService {
   }
 
   @override
-  Future<bool> showRewardedAd() async {
-    // TODO(출시 전): google_mobile_ads 의 RewardedAd 로 교체 (docs/STORE_RELEASE.md)
-    return await (confirm?.call('광고', '보상형 광고 준비 중이에요. 보상을 받을까요?') ??
-        Future.value(false));
-  }
+  Future<bool> showRewardedAd() => AdService.instance.showRewarded();
 
   void dispose() => _sub?.cancel();
 }

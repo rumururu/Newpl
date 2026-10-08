@@ -4,6 +4,7 @@ import '../game/models.dart';
 import '../game/profile.dart';
 import '../game/save.dart';
 import '../game/world.dart';
+import 'ads.dart';
 import 'audio.dart';
 import 'monetization.dart';
 
@@ -23,6 +24,14 @@ class AppState {
       ..soundOn = profile.sound
       ..musicOn = profile.music;
     AudioService.instance.init();
+    AdService.instance.init();
+  }
+
+  /// 보상형 광고 시청. 사령관 패스 보유자는 광고 없이 바로 보상.
+  /// 광고가 아직 준비되지 않았으면 false.
+  static Future<bool> watchAd() async {
+    if (profile.premium) return true;
+    return money.showRewardedAd();
   }
 
   static void haptic() {

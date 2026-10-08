@@ -29,42 +29,26 @@
 
 > ⚠️ 출시 전에 **영수증 서버 검증**을 추가하는 것을 권장합니다 (`StoreMonetization._onPurchases`의 TODO 참고). Firebase Functions 등으로 구현할 수 있습니다.
 
-## 3. 보상형 광고 (AdMob) 연동
-현재 `StoreMonetization.showRewardedAd()`는 임시 확인창입니다. 출시 전에 다음 순서로 교체하세요.
+## 3. 보상형 광고 (AdMob)
+`google_mobile_ads` 연동은 끝나 있습니다(`lib/services/ads.dart`). 지금은 **구글 공식 테스트 ID**라서 테스트 광고가 나옵니다. 출시 전에 실제 ID로 바꾸세요.
 
-1. AdMob에서 앱을 등록하고 **앱 ID**와 **보상형 광고 단위 ID**를 발급받습니다.
-2. `flutter pub add google_mobile_ads`
-3. Android `AndroidManifest.xml`의 `<application>` 안에 추가합니다.
-   ```xml
-   <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID"
-              android:value="ca-app-pub-XXXXXXXX~YYYYYYYY"/>
+1. AdMob에서 앱(Android/iOS)을 등록하고 **앱 ID**와 **보상형 광고 단위 ID**를 발급받습니다.
+2. 앱 ID 교체
+   - Android: `android/app/src/main/AndroidManifest.xml`의 `com.google.android.gms.ads.APPLICATION_ID`
+   - iOS: `ios/Runner/Info.plist`의 `GADApplicationIdentifier`
+3. 광고 단위 ID는 빌드할 때 넣습니다(코드 수정 불필요).
+   ```bash
+   flutter build appbundle --release \
+     --dart-define=ADMOB_REWARDED_ANDROID=ca-app-pub-XXXX/YYYY
+   flutter build ipa --release \
+     --dart-define=ADMOB_REWARDED_IOS=ca-app-pub-XXXX/ZZZZ
    ```
-4. iOS `Info.plist`에 `GADApplicationIdentifier`와 `SKAdNetworkItems`를 추가합니다.
-5. `showRewardedAd()`를 아래처럼 교체합니다.
-   ```dart
-   @override
-   Future<bool> showRewardedAd() async {
-     final done = Completer<bool>();
-     await RewardedAd.load(
-       adUnitId: 'ca-app-pub-XXXX/YYYY',
-       request: const AdRequest(),
-       rewardedAdLoadCallback: RewardedAdLoadCallback(
-         onAdLoaded: (ad) {
-           var earned = false;
-           ad.fullScreenContentCallback = FullScreenContentCallback(
-             onAdDismissedFullScreenContent: (ad) { ad.dispose(); done.complete(earned); },
-             onAdFailedToShowFullScreenContent: (ad, e) { ad.dispose(); done.complete(false); },
-           );
-           ad.show(onUserEarnedReward: (_, __) => earned = true);
-         },
-         onAdFailedToLoad: (e) => done.complete(false),
-       ),
-     );
-     return done.future;
-   }
-   ```
-6. `main()`에서 `MobileAds.instance.initialize()`를 호출합니다.
-7. 아동 대상 설정, GDPR/UMP 동의 메시지를 AdMob 콘솔에서 구성합니다.
+4. AdMob 콘솔에서 GDPR/UMP 동의 메시지와 아동 대상 설정을 구성합니다.
+
+사령관 패스 보유자는 광고 없이 바로 보상을 받습니다(`AppState.watchAd`).
+
+## 3-1. CI (GitHub Actions)
+`.github/workflows/ci.yml`이 푸시할 때마다 분석, 테스트, 웹 빌드, **안드로이드 APK 빌드**를 실행합니다. Actions 탭의 실행 결과에서 `android-apk` 아티팩트를 받아 폰에 바로 설치해볼 수 있습니다(서명 키가 없으면 디버그 키로 서명된 테스트용).
 
 ## 4. 안드로이드 릴리즈 빌드
 ```bash
@@ -77,7 +61,7 @@ keyPassword=...
 keyAlias=upload
 storeFile=/절대경로/upload-keystore.jks
 ```
-`android/app/build.gradle.kts`의 `buildTypes.release`에 `signingConfig`를 연결한 뒤 빌드합니다.
+`android/app/build.gradle.kts`는 `key.properties`가 있으면 자동으로 릴리즈 키로 서명합니다(없으면 디버그 키).
 ```bash
 flutter build appbundle --release
 # 결과물: build/app/outputs/bundle/release/app-release.aab → Play Console 업로드

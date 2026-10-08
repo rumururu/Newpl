@@ -1,0 +1,6 @@
+BM JUA (Jua-Regular.ttf)
+Copyright 2018 The BM JUA Project Authors
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+Full license text: https://openfontlicense.org/open-font-license-official-text/
+Source: https://fonts.google.com/specimen/Jua

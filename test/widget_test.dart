@@ -326,4 +326,20 @@ void main() {
     expect(euro('섹터 2'), '섹터 2로');
     expect(eul('⭐100'), '⭐100을');
   });
+
+  test('두목 2페이즈: 체력 절반 이하에서 부하 소환', () {
+    final w = GameWorld(seed: 21);
+    final boss = Pirate(PirateKind.boss, w.player.pos + const Offset(0, -500), 100)..hp = 40;
+    w.pirates.add(boss);
+    final before = w.pirates.length;
+    w.update(1 / 60, InputState());
+    expect(boss.enraged, isTrue);
+    expect(w.pirates.length, greaterThan(before));
+  });
+
+  test('튜토리얼 안내: 정착 단계에서 가까운 미정착 행성을 가리킴', () {
+    final w = GameWorld(seed: 22);
+    w.storyIndex = storySteps.indexWhere((s) => s.key == 'colonies');
+    expect(w.storyTarget, w.planets.first.pos);
+  });
 }

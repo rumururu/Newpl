@@ -35,6 +35,7 @@ class StarSettlersApp extends StatelessWidget {
         theme: ThemeData(
           brightness: Brightness.dark,
           colorSchemeSeed: kAccent,
+          fontFamily: 'Jua',
           useMaterial3: true,
         ),
         home: const TitleScreen(),

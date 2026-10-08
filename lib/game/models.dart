@@ -70,6 +70,10 @@ class Pirate {
   /// 현상수배범 / 섹터 두목 이름
   final String? name;
   bool sectorBoss = false;
+
+  /// 두목 패턴: 체력 절반 이하 2페이즈, 특수 공격 타이머
+  bool enraged = false;
+  double specialTimer = 5;
   int? missionId;
   int? eventId;
 

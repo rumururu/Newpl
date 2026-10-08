@@ -41,7 +41,7 @@ TextPainter _text(String text, Color color, double size) {
         style: TextStyle(
             color: color,
             fontSize: size,
-            fontWeight: FontWeight.bold,
+            fontFamily: 'Jua',
             shadows: const [Shadow(blurRadius: 3, color: Colors.black)])),
     textDirection: TextDirection.ltr,
   )..layout();
@@ -606,6 +606,10 @@ class WorldPainter extends CustomPainter {
       _paintJelly(canvas, e, t);
       return;
     }
+    if (e.enraged) {
+      canvas.drawCircle(e.pos, e.radius * (1.5 + 0.1 * sin(t * 12)),
+          Paint()..color = const Color(0x44FF1744));
+    }
     final scale = e.radius / 20;
     canvas.save();
     canvas.translate(e.pos.dx, e.pos.dy);
@@ -776,6 +780,8 @@ class WorldPainter extends CustomPainter {
     for (final pos in world.missionTargets) {
       arrow(pos, const Color(0xEEFFAB00), 9000, scale: 1.2);
     }
+    final st = world.storyTarget;
+    if (st != null) arrow(st, const Color(0xEE69F0AE), 9000, scale: 1.5);
     for (final g in world.gates) {
       if (g.forward && world.gateOpen(g)) arrow(g.pos, const Color(0xEEB388FF), 9000, scale: 1.3);
     }
@@ -853,6 +859,16 @@ class MinimapPainter extends CustomPainter {
             ..style = PaintingStyle.stroke
             ..strokeWidth = 1.5
             ..color = const Color(0xFFFFAB00));
+    }
+    final st = world.storyTarget;
+    if (st != null) {
+      canvas.drawCircle(
+          m(st),
+          6,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2
+            ..color = const Color(0xFF69F0AE));
     }
     canvas.drawCircle(m(world.player.pos), 3, Paint()..color = Colors.white);
   }

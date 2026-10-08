@@ -425,6 +425,31 @@ class GameWorld {
     if (floats.length > 60) floats.removeAt(0);
   }
 
+  /// 스토리(튜토리얼) 단계가 가리키는 위치 (초록 화살표)
+  Offset? get storyTarget {
+    switch (story.key) {
+      case 'colonies':
+        final p = planets.where((p) => p.colonyLevel == 0).toList();
+        if (p.isEmpty) return null;
+        p.sort((a, b) =>
+            (a.pos - player.pos).distance.compareTo((b.pos - player.pos).distance));
+        return p.first.pos;
+      case 'shipLevels':
+      case 'crew':
+      case 'missions':
+        if (nearbyStation != null) return null;
+        return stations
+            .reduce((a, b) =>
+                (a.pos - player.pos).distance < (b.pos - player.pos).distance ? a : b)
+            .pos;
+      case 'sector':
+        final g = gates.where((g) => g.forward && gateOpen(g));
+        return g.isEmpty ? null : g.first.pos;
+      default:
+        return null;
+    }
+  }
+
   /// 현재 임무 목표 위치들 (화살표/미니맵 표시용)
   List<Offset> get missionTargets => [
         for (final m in activeMissions)
@@ -1076,6 +1101,8 @@ class GameWorld {
       e.pos += e.vel * dt;
       e.pos = _clampWorld(e.pos, (v) => e.vel = v);
 
+      if (e.kind == PirateKind.boss) _bossPattern(e, dt, targetDist);
+
       if (target == null) continue;
       final aim = atan2(target.dy - e.pos.dy, target.dx - e.pos.dx);
       e.angle += angleDiff(e.angle, aim).clamp(-4 * dt, 4 * dt);
@@ -1100,6 +1127,10 @@ class GameWorld {
         }
       }
     }
+    if (_spawnQueue.isNotEmpty) {
+      pirates.addAll(_spawnQueue);
+      _spawnQueue.clear();
+    }
     for (final e in exploded) {
       pirates.remove(e);
       _burst(e.pos, const Color(0xFFFFAB40), 50);
@@ -1109,6 +1140,36 @@ class GameWorld {
       for (final s in stations) {
         if ((s.pos - e.pos).distance < 120) s.hp -= e.damage;
       }
+    }
+  }
+
+  final _spawnQueue = <Pirate>[];
+
+  void _bossPattern(Pirate e, double dt, double targetDist) {
+    // 2페이즈: 체력 절반 이하에서 부하 소환 + 공격 강화
+    if (!e.enraged && e.hp < e.maxHp * 0.5) {
+      e.enraged = true;
+      for (var i = 0; i < 3 + sector; i++) {
+        _spawnQueue.add(_makePirate(
+            i.isEven ? PirateKind.scout : PirateKind.bomber,
+            e.pos + OffsetX.fromAngle(i * 2.1, 90)));
+      }
+      shake = min(20, shake + 10);
+      sfx.add(Sfx.alarm);
+      say(Speaker.pirate, ['얘들아, 나와라! 본때를 보여줘!', '이제부터 진짜다!', '화나게 했겠다?!'][_rng.nextInt(3)]);
+    }
+    // 특수 공격: 원형 탄막
+    e.specialTimer -= dt;
+    if (e.specialTimer <= 0 && targetDist < 900) {
+      e.specialTimer = e.enraged ? 3.5 : 6;
+      final n = e.enraged ? 16 : 10;
+      final off = _rng.nextDouble();
+      for (var i = 0; i < n; i++) {
+        final dir = OffsetX.fromAngle(off + i * 2 * pi / n);
+        bullets.add(Bullet(e.pos + dir * e.radius, dir * 300, e.damage * 0.8 * _newbieMul, false,
+            life: 2.5, big: true));
+      }
+      _burst(e.pos, const Color(0xFFCE93D8), 20);
     }
   }
 

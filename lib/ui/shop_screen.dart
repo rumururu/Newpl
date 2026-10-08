@@ -35,8 +35,12 @@ class _ShopScreenState extends State<ShopScreen> {
   Future<void> _freeGems() async {
     final now = DateTime.now();
     if (AppState.profile.adGemsLeft(now) <= 0) return;
-    final ok = AppState.profile.premium || await AppState.money.showRewardedAd();
-    if (!ok || !mounted) return;
+    final ok = await AppState.watchAd();
+    if (!mounted) return;
+    if (!ok) {
+      toast(context, '광고를 불러오는 중이에요. 잠시 후 다시 시도해 주세요.');
+      return;
+    }
     AppState.profile.claimAdGems(now);
     AppState.play(Sfx.gem);
     await SaveService.saveProfile(AppState.profile);

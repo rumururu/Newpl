@@ -234,8 +234,13 @@ class _GameScreenState extends State<GameScreen>
           if (!premium) TextButton(onPressed: () => Navigator.pop(ctx, 1), child: const Text('받기')),
           FilledButton(
             onPressed: () async {
-              final ok = premium || await AppState.money.showRewardedAd();
-              if (ctx.mounted) Navigator.pop(ctx, ok ? 2 : 1);
+              final ok = await AppState.watchAd();
+              if (!ctx.mounted) return;
+              if (ok) {
+                Navigator.pop(ctx, 2);
+              } else {
+                toast(ctx, '광고를 불러오는 중이에요. 잠시 후 다시 시도해 주세요.');
+              }
             },
             child: Text(premium ? '2배로 받기 👑' : '📺 광고 보고 2배'),
           ),
@@ -250,9 +255,13 @@ class _GameScreenState extends State<GameScreen>
 
   Future<void> _reviveWithAd() async {
     _modal = true;
-    final ok = w.profile.premium || await AppState.money.showRewardedAd();
+    final ok = await AppState.watchAd();
     _modal = false;
-    if (ok) w.reviveHere();
+    if (ok) {
+      w.reviveHere();
+    } else {
+      w.say(Speaker.advisor, '광고를 불러오는 중이에요. 잠시 후 다시 눌러주세요.');
+    }
   }
 
   void _reviveWithGems() {
