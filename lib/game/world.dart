@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'crew.dart';
+import 'home.dart';
 import 'missions.dart';
 import 'models.dart';
 import 'profile.dart';
@@ -180,14 +181,18 @@ class GameWorld {
   ShipType get ship => shipTypeById(profile.shipType);
 
   double get playerMaxHp =>
-      (100 + level(UpgradeKind.hull) * 40.0) * (1 + crewBonus(CrewRole.engineer)) * ship.hpMul;
+      (100 + level(UpgradeKind.hull) * 40.0) *
+      (1 + crewBonus(CrewRole.engineer)) *
+      ship.hpMul *
+      profile.home.hpMul;
   double get playerSpeed =>
       (260 + level(UpgradeKind.engine) * 40.0) * (1 + crewBonus(CrewRole.pilot)) * ship.speedMul;
   double get playerDamage =>
       (10 + weaponLevel * 5.0) *
       (1 + crewBonus(CrewRole.gunner)) *
       ship.dmgMul *
-      profile.honorDamageMul;
+      profile.honorDamageMul *
+      profile.home.damageMul;
   double get playerFireInterval =>
       0.25 *
       pow(0.9, weaponLevel) *
@@ -205,7 +210,8 @@ class GameWorld {
   double get droneDamage => (5 + droneLevel * 4) * (1 + crewBonus(CrewRole.gunner)) * profile.honorDamageMul;
   double get droneInterval => 1.2 - droneLevel * 0.15;
   int get playerShots => weaponLevel >= 6 ? 3 : (weaponLevel >= 3 ? 2 : 1);
-  double get cooldownMul => 1 - min(0.5, crewBonus(CrewRole.scientist));
+  double get cooldownMul =>
+      max(0.4, (1 - min(0.5, crewBonus(CrewRole.scientist))) * profile.home.cooldownMul);
   double get missileCooldownMax => 8 * cooldownMul;
   double get shieldCooldownMax => 18 * cooldownMul;
   double get boostCooldownMax => 4 * cooldownMul;
@@ -226,7 +232,9 @@ class GameWorld {
       stations.fold<int>(0, (s, st) => s + st.habitatLevel - 1) * 0.15;
 
   double get _incomeMul =>
-      (1 + crewBonus(CrewRole.trader)) * (profile.premium ? 1.25 : 1) * profile.honorIncomeMul;
+      (1 + crewBonus(CrewRole.trader)) * (profile.premium ? 1.25 : 1) *
+      profile.honorIncomeMul *
+      profile.home.incomeMul;
 
   // ---------- 은하 명예 ----------
   /// 섹터 4(인덱스 3)에 도달하면 환생 가능
@@ -239,7 +247,11 @@ class GameWorld {
       p.raided ? 0 : p.ratePerLevel.$1 * p.colonyLevel * sectorMul * _incomeMul;
   double planetOreRate(Planet p) => p.raided
       ? 0
-      : p.ratePerLevel.$2 * p.colonyLevel * sectorMul * (1 + crewBonus(CrewRole.miner));
+      : p.ratePerLevel.$2 *
+          p.colonyLevel *
+          sectorMul *
+          (1 + crewBonus(CrewRole.miner)) *
+          profile.home.oreMul;
   double stationCreditRate(Station s) => s.baseCreditRate * sectorMul * _incomeMul;
 
   double get otherSectorCredits =>
@@ -621,6 +633,59 @@ class GameWorld {
     return true;
   }
 
+  // ---------- 내 행성 ----------
+  HomePlanet get home => profile.home;
+
+  bool buildHome(int slot, BuildingType t) {
+    if (slot < 0 || slot >= home.slots.length || home.slots[slot] != null) return false;
+    if (t.gemOnly) {
+      if (!profile.spendGems(home.statueGemCost(0))) return false;
+    } else if (!_pay(home.buildCost(t))) {
+      return false;
+    }
+    home.slots[slot] = HomeSlot(t);
+    profile.maxStat('homeBuildings', home.buildingCount);
+    profile.dirty = true;
+    sfx.add(Sfx.upgrade);
+    return true;
+  }
+
+  bool upgradeHome(int slot) {
+    final s = home.slots[slot];
+    if (s == null || s.level >= HomeSlot.maxLevel) return false;
+    if (s.type.gemOnly) {
+      if (!profile.spendGems(home.statueGemCost(s.level))) return false;
+    } else if (!_pay(home.upgradeCost(s))) {
+      return false;
+    }
+    s.level++;
+    profile.dirty = true;
+    sfx.add(Sfx.upgrade);
+    return true;
+  }
+
+  bool levelUpHome() {
+    if (home.level >= HomePlanet.maxLevel) return false;
+    if (!_pay(home.levelUpCost)) return false;
+    home.levelUp();
+    profile.maxStat('homeLevel', home.level);
+    profile.dirty = true;
+    sfx.add(Sfx.warp);
+    return true;
+  }
+
+  /// 8시간마다 받는 행성 선물. 받은 (크레딧, 젬) 반환
+  (int, int)? harvestHome(DateTime now) {
+    if (!home.harvestReady(now)) return null;
+    final r = home.harvestReward(sectorMul);
+    home.lastHarvestMs = now.millisecondsSinceEpoch;
+    credits += r.$1;
+    profile.gems += r.$2;
+    profile.dirty = true;
+    sfx.add(Sfx.gem);
+    return r;
+  }
+
   bool sellOre(int amount) {
     final n = min(amount, ore.floor());
     if (n <= 0) return false;
@@ -907,7 +972,8 @@ class GameWorld {
     final cap = profile.premium ? 8 * 3600 : 2 * 3600;
     final sec = now.difference(savedAt!).inSeconds.clamp(0, cap);
     if (sec < 60) return (0, 0, 0);
-    return (sec, creditIncome * sec * 0.5, oreIncome * sec * 0.5);
+    final eff = profile.home.offlineEfficiency;
+    return (sec, creditIncome * sec * eff, oreIncome * sec * eff);
   }
 
   void applyOffline(double c, double o) {
@@ -1530,7 +1596,8 @@ class GameWorld {
         sfx.add(Sfx.coin);
         _float(k.pos, '+$n', const Color(0xFFFFD54F));
       case PickupKind.ore:
-        final n = (k.amount * (1 + crewBonus(CrewRole.miner)) * ship.oreMul).round();
+        final n =
+            (k.amount * (1 + crewBonus(CrewRole.miner)) * ship.oreMul * profile.home.oreMul).round();
         ore += n;
         profile.addStat('ore', n);
         for (final m in activeMissions) {

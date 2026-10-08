@@ -10,6 +10,7 @@ import 'services/app_state.dart';
 import 'ui/chibi.dart';
 import 'ui/common.dart';
 import 'ui/game_screen.dart';
+import 'ui/home_screen.dart';
 import 'ui/meta_screens.dart';
 import 'ui/shop_screen.dart';
 
@@ -206,9 +207,11 @@ class _TitleScreenState extends State<TitleScreen> with SingleTickerProviderStat
                       const SizedBox(height: 10),
                       _menuButton('✨ 새 게임', _newGame, primary: !_hasSave),
                       const SizedBox(height: 18),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        runSpacing: 8,
                         children: [
+                          _iconMenu('🌍', '내 행성', () => _open(const HomePlanetScreen())),
                           _iconMenu('⭐', '상점', () => _open(const ShopScreen())),
                           _iconMenu('📅', '퀘스트', () => _open(const DailyQuestScreen()),
                               badge: p.dailyClaimable > 0),

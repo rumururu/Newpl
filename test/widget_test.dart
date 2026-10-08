@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:star_settlers/game/crew.dart';
+import 'package:star_settlers/game/home.dart';
 import 'package:star_settlers/game/josa.dart';
 import 'package:star_settlers/game/missions.dart';
 import 'package:star_settlers/game/models.dart';
@@ -482,6 +483,65 @@ void main() {
       final b = w2.pirates.firstWhere((e) => e.missionId == 77);
       expect((b.pos - const Offset(3000, 3000)).distance, lessThan(3500));
       expect((b.pos - Offset.zero).distance, greaterThan(500));
+    });
+  });
+
+  group('내 행성', () {
+    test('건설·업그레이드·레벨업과 보너스 반영', () {
+      final w = rich(seed: 51);
+      final inc = w.creditIncome;
+      final hp = w.playerMaxHp;
+      expect(w.buildHome(0, BuildingType.farm), isTrue);
+      expect(w.buildHome(0, BuildingType.mine), isFalse); // 이미 지어진 칸
+      expect(w.buildHome(1, BuildingType.tower), isTrue);
+      expect(w.creditIncome, closeTo(inc * 1.03, 0.01));
+      expect(w.playerMaxHp, closeTo(hp * 1.04, 0.01));
+      expect(w.upgradeHome(0), isTrue);
+      expect(w.home.levelOf(BuildingType.farm), 2);
+      final slots = w.home.slots.length;
+      expect(w.levelUpHome(), isTrue);
+      expect(w.home.slots.length, slots + 2);
+    });
+
+    test('동상은 젬으로만', () {
+      final w = rich(seed: 52)..profile.gems = 0;
+      expect(w.buildHome(0, BuildingType.statue), isFalse);
+      w.profile.gems = 100;
+      expect(w.buildHome(0, BuildingType.statue), isTrue);
+      expect(w.profile.gems, 100 - w.home.statueGemCost(0));
+    });
+
+    test('행성 선물은 8시간마다', () {
+      final w = rich(seed: 53);
+      final now = DateTime(2026, 7, 1, 10);
+      final gems = w.profile.gems;
+      expect(w.harvestHome(now), isNotNull);
+      expect(w.profile.gems, greaterThan(gems));
+      expect(w.harvestHome(now.add(const Duration(hours: 7))), isNull);
+      expect(w.harvestHome(now.add(const Duration(hours: 8))), isNotNull);
+    });
+
+    test('놀이공원은 오프라인 효율을 올린다', () {
+      final w = rich(seed: 54);
+      w.upgradePlanet(w.planets.first);
+      final now = DateTime(2026, 7, 1, 12);
+      w.savedAt = now.subtract(const Duration(hours: 1));
+      final base = w.offlineEarnings(now).$2;
+      w.buildHome(0, BuildingType.park);
+      expect(w.offlineEarnings(now).$2, closeTo(base * 1.1, base * 0.01));
+    });
+
+    test('내 행성은 프로필에 저장되고 환생해도 유지', () {
+      final w = rich(seed: 55);
+      w.buildHome(2, BuildingType.lab);
+      w.home
+        ..name = '토끼별'
+        ..palette = 3;
+      final p2 = Profile.fromJson(w.profile.toJson());
+      expect(p2.home.name, '토끼별');
+      expect(p2.home.slots[2]?.type, BuildingType.lab);
+      final w2 = GameWorld(seed: 56, profile: p2);
+      expect(w2.home.levelOf(BuildingType.lab), 1);
     });
   });
 }

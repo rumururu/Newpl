@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'home.dart';
 import 'ships.dart';
 
 /// 새 게임을 시작해도 유지되는 계정 단위 데이터
@@ -35,6 +36,8 @@ const achievements = [
   Achievement('fashion', '패셔니스타', '꾸미기 아이템 구매', 'cosmetics', 1, 5),
   Achievement('ascend', '새로운 시작', '은하 명예로 환생', 'ascensions', 1, 30),
   Achievement('drone', '든든한 드론', '전투 드론 장착', 'drone', 1, 5),
+  Achievement('home5', '행성 건축가', '내 행성에 건물 5개', 'homeBuildings', 5, 15),
+  Achievement('homeMax', '꿈의 행성', '내 행성 최대 레벨', 'homeLevel', 4, 30),
 ];
 
 const loginRewards = [5, 5, 10, 10, 15, 20, 50];
@@ -101,6 +104,9 @@ class Profile {
   final dailyClaimed = <String>{};
 
   bool notifications = true;
+
+  // 내 행성
+  HomePlanet home = HomePlanet();
 
   /// 저장 필요 표시
   bool dirty = false;
@@ -278,6 +284,7 @@ class Profile {
         'dailyBase': dailyBase,
         'dailyClaimed': dailyClaimed.toList(),
         'notifications': notifications,
+        'home': home.toJson(),
       };
 
   static Profile fromJson(Map<String, dynamic> j) {
@@ -302,6 +309,9 @@ class Profile {
       ..ascensions = j['ascensions'] as int? ?? 0
       ..dailyDay = j['dailyDay'] as int? ?? 0
       ..notifications = j['notifications'] as bool? ?? true;
+    if (j['home'] is Map) {
+      p.home = HomePlanet.fromJson((j['home'] as Map).cast<String, dynamic>());
+    }
     p.ownedShips.addAll(((j['ships'] as List?) ?? []).cast<String>());
     p.dailyIds.addAll(((j['dailyIds'] as List?) ?? []).cast<String>());
     p.dailyClaimed.addAll(((j['dailyClaimed'] as List?) ?? []).cast<String>());

@@ -13,6 +13,7 @@ import '../services/app_state.dart';
 import '../services/audio.dart';
 import '../services/notifications.dart';
 import 'chibi.dart';
+import 'home_screen.dart';
 import 'common.dart';
 import 'merchant_panel.dart';
 import 'meta_screens.dart';
@@ -846,6 +847,9 @@ class _GameScreenState extends State<GameScreen>
                 child: actionBtn('📅 일일 퀘스트', true, () => _modalRoute(const DailyQuestScreen())),
               ),
             ),
+            const SizedBox(height: 8),
+            actionBtn('🌍 내 행성', true, () => _modalRoute(const HomePlanetScreen()),
+                color: const Color(0xFF00897B)),
             const SizedBox(height: 8),
             actionBtn('🌌 은하 명예 (환생)', true, _showAscend, color: const Color(0xFF4527A0)),
             const SizedBox(height: 8),
