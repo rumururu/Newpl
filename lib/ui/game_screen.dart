@@ -42,6 +42,7 @@ class _GameScreenState extends State<GameScreen>
   Duration _last = Duration.zero;
   double _saveTimer = 0;
   double _profileTimer = 0;
+  int _profileSaveCount = 0;
   final _notified = <String>{};
 
   Offset _stick = Offset.zero;
@@ -80,7 +81,10 @@ class _GameScreenState extends State<GameScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       AudioService.instance.startMusic();
-    } else {
+      // 백그라운드에 있던 시간만큼 오프라인 수입 (1분 이상일 때)
+      if (w.savedAt != null && !_modal) _showOffline();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      w.savedAt ??= DateTime.now();
       SaveService.save(w);
       AudioService.instance.stopMusic();
     }
@@ -123,13 +127,14 @@ class _GameScreenState extends State<GameScreen>
     _profileTimer += dt;
     if (_profileTimer > 1) {
       _profileTimer = 0;
+      _profileSaveCount++;
       for (final a in w.profile.claimable) {
         if (_notified.add(a.id)) {
           w.say(Speaker.advisor, '🏆 업적 달성: ${a.title}! 메뉴의 업적에서 ⭐${a.gems}를 받으세요.');
           w.sfx.add(Sfx.gem);
         }
       }
-      if (w.profile.dirty) SaveService.saveProfile(w.profile);
+      if (w.profile.dirty && _profileSaveCount % 5 == 0) SaveService.saveProfile(w.profile);
     }
     // 다른 오버레이가 사라졌으면 닫기
     if (_overlay == _Overlay.station && w.nearbyStation == null) _setOverlay(_Overlay.none);
