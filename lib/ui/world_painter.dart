@@ -21,11 +21,17 @@ final List<_Star> _stars = () {
   });
 }();
 
-/// 자주 쓰는 라벨 TextPainter 캐시
+/// 자주 쓰는 라벨 TextPainter 캐시.
+/// 웹에서는 한글 대체 폰트가 늦게 로드되므로, 폰트가 바뀌면 캐시를 비운다.
 final _textCache = <String, TextPainter>{};
+bool _fontListener = false;
 
 TextPainter _text(String text, Color color, double size) {
   final key = '$text|${color.toARGB32()}|$size';
+  if (!_fontListener) {
+    _fontListener = true;
+    PaintingBinding.instance.systemFonts.addListener(_textCache.clear);
+  }
   final hit = _textCache[key];
   if (hit != null) return hit;
   if (_textCache.length > 400) _textCache.clear();

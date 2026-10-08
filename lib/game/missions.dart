@@ -1,3 +1,4 @@
+import 'josa.dart';
 import 'models.dart';
 
 enum MissionType { kill, mine, deliver, bounty }
@@ -29,7 +30,7 @@ class Mission {
         MissionType.kill => '해적 $target척 소탕',
         MissionType.mine => '광석 $target개 수집',
         MissionType.deliver =>
-          '${planetIndex != null && planetIndex! < planets.length ? planets[planetIndex!].name : '?'}(으)로 화물 운송',
+          '${euro(planetIndex != null && planetIndex! < planets.length ? planets[planetIndex!].name : '?')} 화물 운송',
         MissionType.bounty => '현상수배: $bountyName',
       };
 
@@ -127,7 +128,7 @@ StoryStep storyStepAt(int index) {
       (Speaker.advisor, '이 섹터의 두목을 찾아 쓰러뜨려요! 위협도가 오르면 나타나요.'),
     ], credits: 500 * (sector + 1), gems: 15);
   }
-  return StoryStep('섹터 ${sector + 2}(으)로 워프', 'sector', sector + 1, [
+  return StoryStep('${euro('섹터 ${sector + 2}')} 워프', 'sector', sector + 1, [
     (Speaker.advisor, '게이트가 열렸어요. 더 깊은 우주로 가볼까요?'),
   ], credits: 300 * (sector + 1), gems: 10);
 }

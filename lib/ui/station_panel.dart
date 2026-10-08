@@ -1,3 +1,4 @@
+import '../game/josa.dart';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -331,7 +332,7 @@ class _CrewTab extends StatelessWidget {
                           icon: const Icon(Icons.logout, color: Colors.white38, size: 18),
                           onPressed: () async {
                             if (await confirmDialog(
-                                context, '승무원 방출', '${c.name}을(를) 떠나보낼까요? 되돌릴 수 없어요.')) {
+                                context, '승무원 방출', '${eul(c.name)} 떠나보낼까요? 되돌릴 수 없어요.')) {
                               act(() {
                                 w.dismissCrew(c);
                                 return true;

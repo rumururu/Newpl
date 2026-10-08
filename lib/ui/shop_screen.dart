@@ -1,3 +1,4 @@
+import '../game/josa.dart';
 import 'package:flutter/material.dart';
 
 import '../game/cosmetics.dart';
@@ -48,7 +49,7 @@ class _ShopScreenState extends State<ShopScreen> {
       toast(context, '젬이 부족해요');
       return;
     }
-    if (!await confirmDialog(context, '구매 확인', '⭐$price을(를) 사용할까요?')) return;
+    if (!await confirmDialog(context, '구매 확인', '${eul("⭐$price")} 사용할까요?')) return;
     p.spendGems(price);
     give();
     p.addStat('cosmetics');

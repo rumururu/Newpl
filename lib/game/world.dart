@@ -1,3 +1,4 @@
+import 'josa.dart';
 import 'dart:math';
 import 'dart:ui';
 
@@ -9,6 +10,9 @@ import 'profile.dart';
 class InputState {
   Offset move = Offset.zero; // 길이 0..1
   bool fire = false;
+
+  /// true면 360° 가장 가까운 적을 자동 조준 (자동 사격 모드)
+  bool autoAim = false;
 }
 
 enum UpgradeKind { weapon, hull, engine, missile, shield }
@@ -145,7 +149,7 @@ class GameWorld {
   double storyTimer = 0;
 
   double totalTime = 0;
-  double spawnTimer = 8;
+  double spawnTimer = 25;
   double eventTimer = 70;
   double jellyTimer = 20;
   double _secondTimer = 0;
@@ -328,6 +332,7 @@ class GameWorld {
       bossesSpawned = save.bossesSpawned;
     } else {
       stations.add(Station(index == 0 ? '헤이븐 기지' : '$sectorName 전진기지', Offset.zero)
+        ..turretLevel = 1
         ..hp = 300);
       sectorElapsed = 0;
       bossDefeated = false;
@@ -580,7 +585,7 @@ class GameWorld {
     profile.addStat('crew');
     if (c.rarity == 3) profile.addStat('crew3');
     sfx.add(Sfx.gem);
-    say(Speaker.advisor, '${c.stars} ${c.role.label} ${c.name}이(가) 합류했어요!');
+    say(Speaker.advisor, '${c.stars} ${c.role.label} ${iGa(c.name)} 합류했어요!');
     if (c.role == CrewRole.engineer) player.hp = min(player.hp, playerMaxHp);
     return c;
   }
@@ -614,16 +619,18 @@ class GameWorld {
   // ---------- 임무 ----------
   void _refreshOffers() {
     missionOffers.clear();
-    for (var i = 0; i < 3; i++) {
-      missionOffers.add(_randomMission());
+    // 같은 종류가 겹치지 않게 4종 중 3종을 고른다
+    final types = [...MissionType.values]..shuffle(_rng);
+    for (final type in types.take(3)) {
+      missionOffers.add(_randomMission(type));
     }
     offerTimer = 180;
   }
 
-  Mission _randomMission() {
+  Mission _randomMission(MissionType type) {
     final t = threat;
     final gemBonus = _rng.nextDouble() < 0.15 ? 2 : 0;
-    switch (_rng.nextInt(4)) {
+    switch (type.index) {
       case 0:
         final n = 5 + (t * 2).round();
         return Mission(
@@ -643,7 +650,11 @@ class GameWorld {
       default:
         return Mission(
             id: _nextId++, type: MissionType.bounty, target: 1,
-            bountyName: bountyNames[_rng.nextInt(bountyNames.length)],
+            bountyName: (bountyNames
+                    .where((n) => !activeMissions.any((m) => m.bountyName == n))
+                    .toList()
+                  ..shuffle(_rng))
+                .first,
             rewardCredits: (450 * sectorMul).round(), rewardGems: 5);
     }
   }
@@ -673,7 +684,7 @@ class GameWorld {
       ..wanderAngle = a;
     pirates.add(e);
     m.bountySpawned = true;
-    say(Speaker.pirate, '${m.bountyName}을(를) 잡겠다고? 어디 한번 와봐라!');
+    say(Speaker.pirate, '${eul(m.bountyName!)} 잡겠다고? 어디 한번 와봐라!');
   }
 
   void _completeMission(Mission m) {
@@ -808,7 +819,7 @@ class GameWorld {
       ..vel = Offset.zero
       ..hp = playerMaxHp
       ..invulnerable = 3;
-    say(Speaker.advisor, '선장님 무사하시군요! 수리비로 💰$lost을(를) 썼어요.');
+    say(Speaker.advisor, '선장님 무사하시군요! 수리비로 💰$lost 썼어요.');
   }
 
   // ---------- 오프라인 수입 ----------
@@ -933,15 +944,39 @@ class GameWorld {
     p.fireCooldown -= dt;
     if (input.fire && p.fireCooldown <= 0) {
       p.fireCooldown = playerFireInterval;
+      final aim = _aimAngle(input.autoAim);
       final shots = playerShots;
       for (var i = 0; i < shots; i++) {
         final spread = shots == 1 ? 0.0 : (i - (shots - 1) / 2) * 0.12;
-        final dir = OffsetX.fromAngle(p.angle + spread);
+        final dir = OffsetX.fromAngle(aim + spread);
         bullets.add(Bullet(p.pos + dir * 22, dir * 760 + p.vel * 0.5, playerDamage, true));
       }
       sfx.add(Sfx.shoot);
     }
   }
+
+  /// 조준 보정: 앞쪽 원뿔 안(자동 모드면 전방위)의 가장 가까운 적을 향한다
+  double _aimAngle(bool allAround) {
+    final p = player;
+    Pirate? best;
+    var bestD = 600.0;
+    for (final e in pirates) {
+      final to = e.pos - p.pos;
+      final d = to.distance;
+      if (d >= bestD) continue;
+      final a = atan2(to.dy, to.dx);
+      if (!allAround && angleDiff(p.angle, a).abs() > 0.6) continue;
+      bestD = d;
+      best = e;
+    }
+    if (best == null) return p.angle;
+    // 이동 예측 조준
+    final lead = best.pos + best.vel * (bestD / 760);
+    return atan2(lead.dy - p.pos.dy, lead.dx - p.pos.dx);
+  }
+
+  /// 첫 섹터 초반에는 해적 공격력을 낮춰 입문을 돕는다
+  double get _newbieMul => sector == 0 && threat < 2 ? 0.6 : 1.0;
 
   Offset _clampWorld(Offset pos, void Function(Offset) setVel) {
     const h = worldHalf;
@@ -1059,7 +1094,7 @@ class GameWorld {
         final speed = e.kind == PirateKind.sniper ? 820.0 : 430.0;
         for (var i = 0; i < shots; i++) {
           final dir = OffsetX.fromAngle(e.angle + (i - (shots - 1) / 2) * 0.2);
-          bullets.add(Bullet(e.pos + dir * e.radius, dir * speed, e.damage, false,
+          bullets.add(Bullet(e.pos + dir * e.radius, dir * speed, e.damage * _newbieMul, false,
               life: e.kind == PirateKind.sniper ? 1.4 : 1.6,
               big: e.kind == PirateKind.sniper || e.kind == PirateKind.boss));
         }
@@ -1232,7 +1267,7 @@ class GameWorld {
       stations.remove(s);
       _burst(s.pos, const Color(0xFFFF5252), 100);
       sfx.add(Sfx.bigExplode);
-      say(Speaker.advisor, '${s.name}이(가) 파괴됐어요! 방어포탑이 필요해요!');
+      say(Speaker.advisor, '${iGa(s.name)} 파괴됐어요! 방어포탑이 필요해요!');
     }
   }
 
@@ -1403,9 +1438,9 @@ class GameWorld {
             pirates.removeWhere((e) => e.eventId == ev.id);
             if (planet.colonyLevel > 1) {
               planet.colonyLevel--;
-              say(Speaker.advisor, '${planet.name}이(가) 약탈당해 Lv.${planet.colonyLevel}로 떨어졌어요… 😢');
+              say(Speaker.advisor, '${iGa(planet.name)} 약탈당해 Lv.${planet.colonyLevel}로 떨어졌어요… 😢');
             } else {
-              say(Speaker.advisor, '해적들이 ${planet.name}을(를) 약탈하고 떠났어요.');
+              say(Speaker.advisor, '해적들이 ${eul(planet.name)} 약탈하고 떠났어요.');
             }
           }
         case EventKind.supply:
@@ -1471,7 +1506,7 @@ class GameWorld {
           e.eventId = id;
           pirates.add(e);
         }
-        say(Speaker.advisor, '긴급! 해적이 ${planet.name}을(를) 습격하고 있어요! 생산이 멈췄어요!');
+        say(Speaker.advisor, '긴급! 해적이 ${eul(planet.name)} 습격하고 있어요! 생산이 멈췄어요!');
         say(Speaker.pirate, '이 식민지는 이제 우리 거다! 크하하!');
         return ev;
       case EventKind.meteor:

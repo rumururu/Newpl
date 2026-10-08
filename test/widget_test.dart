@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:star_settlers/game/crew.dart';
+import 'package:star_settlers/game/josa.dart';
 import 'package:star_settlers/game/missions.dart';
 import 'package:star_settlers/game/models.dart';
 import 'package:star_settlers/game/profile.dart';
@@ -308,5 +309,21 @@ void main() {
       expect(q.ownedSkins, contains('gold'));
       expect(q.stat('kills'), 5);
     });
+  });
+
+  test('한국어 조사', () {
+    expect(eul('테라노바'), '테라노바를');
+    expect(eul('볼카노'), '볼카노를');
+    expect(eul('헤이븐 기지'), '헤이븐 기지를');
+    expect(iGa('루비아'), '루비아가');
+    expect(iGa('정거장 2호'), '정거장 2호가');
+    expect(iGa('뭉치'), '뭉치가');
+    expect(iGa('콩이'), '콩이가');
+    expect(iGa('별'), '별이');
+    expect(euro('유자'), '유자로');
+    expect(euro('망고별'), '망고별로');
+    expect(euro('섹터 3'), '섹터 3으로');
+    expect(euro('섹터 2'), '섹터 2로');
+    expect(eul('⭐100'), '⭐100을');
   });
 }

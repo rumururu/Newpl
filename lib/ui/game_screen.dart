@@ -104,6 +104,7 @@ class _GameScreenState extends State<GameScreen>
     _input.fire = _touchFire ||
         keys.contains(LogicalKeyboardKey.space) ||
         (_autoFire && _targetInRange());
+    _input.autoAim = _autoFire;
 
     w.paused = _overlay != _Overlay.none || _modal;
     w.update(dt, _input);
