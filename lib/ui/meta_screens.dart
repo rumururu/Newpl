@@ -5,6 +5,7 @@ import '../game/profile.dart';
 import '../game/save.dart';
 import '../services/app_state.dart';
 import '../services/audio.dart';
+import '../services/notifications.dart';
 import 'common.dart';
 
 class AchievementsScreen extends StatefulWidget {
@@ -102,6 +103,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
           SwitchListTile(
+            title: const Text('복귀 알림'),
+            subtitle: const Text('식민지 창고가 가득 차면 알려드려요'),
+            value: p.notifications,
+            onChanged: (v) {
+              p.notifications = v;
+              if (!v) NotificationService.instance.cancelAll();
+              _save();
+            },
+          ),
+          SwitchListTile(
             title: const Text('진동'),
             value: p.haptics,
             onChanged: (v) {
@@ -161,3 +172,73 @@ const privacySummary = '''우주 개척단은 게임 진행 데이터(진행 상
 보상형 광고가 적용될 경우 광고 제공사(Google AdMob)가 광고 식별자 등을 수집할 수 있습니다.
 
 문의: 스토어 페이지의 개발자 연락처''';
+
+class DailyQuestScreen extends StatefulWidget {
+  const DailyQuestScreen({super.key});
+
+  @override
+  State<DailyQuestScreen> createState() => _DailyQuestScreenState();
+}
+
+class _DailyQuestScreenState extends State<DailyQuestScreen> {
+  Future<void> _claim(String id) async {
+    final p = AppState.profile;
+    if (!p.claimDaily(id)) return;
+    AppState.play(Sfx.gem);
+    await SaveService.saveProfile(p);
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppState.profile..refreshDaily(DateTime.now());
+    final now = DateTime.now();
+    final reset = DateTime(now.year, now.month, now.day + 1).difference(now);
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D0B26),
+      appBar: AppBar(backgroundColor: const Color(0xFF151236), title: const Text('📅 일일 퀘스트')),
+      body: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Text('초기화까지 ${reset.inHours}시간 ${reset.inMinutes % 60}분', style: dimStyle),
+          const SizedBox(height: 8),
+          for (final q in p.dailyQuests)
+            Card(
+              color: p.dailyClaimed.contains(q.id) ? const Color(0xFF1B3A2A) : const Color(0xFF1E1A4A),
+              child: ListTile(
+                title: Text(q.title, style: bodyStyle),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 4),
+                    LinearProgressIndicator(
+                      value: p.dailyProgress(q) / q.target,
+                      color: const Color(0xFF7CFFB2),
+                      backgroundColor: Colors.white12,
+                    ),
+                    Text('${p.dailyProgress(q)} / ${q.target}', style: dimStyle),
+                  ],
+                ),
+                trailing: p.dailyClaimed.contains(q.id)
+                    ? const Text('✅ 완료', style: TextStyle(color: Color(0xFF7CFFB2)))
+                    : actionBtn('⭐${q.gems} 받기', p.dailyDone(q), () => _claim(q.id),
+                        color: const Color(0xFFAD1457), fontSize: 12),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Card(
+            color: const Color(0xFF311B92),
+            child: ListTile(
+              title: const Text('🎁 모두 완료 보너스', style: bodyStyle),
+              subtitle: const Text('오늘의 퀘스트 3개를 모두 받으면', style: dimStyle),
+              trailing: p.dailyClaimed.contains('bonus')
+                  ? const Text('✅ 완료', style: TextStyle(color: Color(0xFF7CFFB2)))
+                  : actionBtn('⭐$dailyBonusGems 받기', p.dailyBonusReady, () => _claim('bonus'),
+                      color: const Color(0xFFAD1457), fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

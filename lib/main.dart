@@ -195,6 +195,12 @@ class _TitleScreenState extends State<TitleScreen> with SingleTickerProviderStat
                       const SizedBox(height: 6),
                       const Text('해적과 싸우고, 행성에 정착하고, 정거장을 키워라!',
                           style: TextStyle(color: Colors.white70)),
+                      if (p.honor > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text('🌌 은하 명예 ${p.honor}점 · 수입 +${p.honor * 5}% · 공격 +${p.honor * 3}%',
+                              style: const TextStyle(color: Color(0xFFB388FF))),
+                        ),
                       const SizedBox(height: 24),
                       _menuButton('▶ 이어하기', _hasSave ? _continue : null, primary: _hasSave),
                       const SizedBox(height: 10),
@@ -204,6 +210,8 @@ class _TitleScreenState extends State<TitleScreen> with SingleTickerProviderStat
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           _iconMenu('⭐', '상점', () => _open(const ShopScreen())),
+                          _iconMenu('📅', '퀘스트', () => _open(const DailyQuestScreen()),
+                              badge: p.dailyClaimable > 0),
                           _iconMenu('🏆', '업적', () => _open(const AchievementsScreen()),
                               badge: p.claimable.isNotEmpty),
                           _iconMenu('⚙', '설정', () => _open(const SettingsScreen())),
@@ -238,7 +246,7 @@ class _TitleScreenState extends State<TitleScreen> with SingleTickerProviderStat
       );
 
   Widget _iconMenu(String icon, String label, VoidCallback onTap, {bool badge = false}) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 6),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
           onTap: onTap,

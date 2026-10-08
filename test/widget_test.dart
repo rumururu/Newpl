@@ -4,6 +4,7 @@ import 'package:star_settlers/game/josa.dart';
 import 'package:star_settlers/game/missions.dart';
 import 'package:star_settlers/game/models.dart';
 import 'package:star_settlers/game/profile.dart';
+import 'package:star_settlers/game/ships.dart';
 import 'package:star_settlers/game/world.dart';
 
 GameWorld rich({int seed = 1}) => GameWorld(seed: seed)
@@ -341,5 +342,77 @@ void main() {
     final w = GameWorld(seed: 22);
     w.storyIndex = storySteps.indexWhere((s) => s.key == 'colonies');
     expect(w.storyTarget, w.planets.first.pos);
+  });
+
+  group('라운드3', () {
+    test('일일 퀘스트: 날마다 3개, 진행·수령·보너스', () {
+      final p = Profile();
+      final d = DateTime(2026, 5, 1);
+      p.refreshDaily(d);
+      expect(p.dailyQuests.length, 3);
+      for (final q in p.dailyQuests) {
+        p.addStat(q.stat, q.target);
+      }
+      final before = p.gems;
+      for (final q in p.dailyQuests) {
+        expect(p.claimDaily(q.id), isTrue);
+        expect(p.claimDaily(q.id), isFalse);
+      }
+      expect(p.dailyBonusReady, isTrue);
+      expect(p.claimDaily('bonus'), isTrue);
+      expect(p.gems, greaterThan(before + dailyBonusGems));
+      // 다음 날에는 새로 뽑히고 진행도가 0부터
+      p.refreshDaily(DateTime(2026, 5, 2));
+      expect(p.dailyClaimed, isEmpty);
+      expect(p.dailyQuests.every((q) => p.dailyProgress(q) == 0), isTrue);
+    });
+
+    test('일일 퀘스트 상태가 저장/복원된다', () {
+      final p = Profile()..refreshDaily(DateTime(2026, 5, 1));
+      final q = Profile.fromJson(p.toJson());
+      expect(q.dailyIds, p.dailyIds);
+      expect(q.dailyDay, p.dailyDay);
+    });
+
+    test('함선: 잠김/해금/교체 시 성능 반영', () {
+      final w = rich(seed: 31);
+      final inter = shipTypeById('interceptor');
+      expect(w.switchShip(inter), isFalse);
+      w.profile.maxStat('sector', 2);
+      final speed = w.playerSpeed;
+      expect(w.switchShip(inter), isTrue);
+      expect(w.playerSpeed, greaterThan(speed));
+      expect(w.player.hp, lessThanOrEqualTo(w.playerMaxHp));
+    });
+
+    test('함선 젬 구매', () {
+      final w = rich(seed: 32);
+      w.profile.gems = 1000;
+      expect(w.buyShip(shipTypeById('phantom')), isTrue);
+      expect(w.profile.shipType, 'phantom');
+      expect(w.profile.gems, 1000 - shipTypeById('phantom').gemPrice);
+    });
+
+    test('전투 드론이 근처 적을 쏜다', () {
+      final w = rich(seed: 33);
+      w.upgradeShip(UpgradeKind.drone);
+      final e = Pirate(PirateKind.scout, w.player.pos + const Offset(200, 0), 5);
+      w.pirates.add(e);
+      runFor(w, 3);
+      expect(w.pirates.contains(e), isFalse);
+    });
+
+    test('은하 명예 보너스와 환생 조건', () {
+      final w = rich(seed: 34);
+      final inc = w.creditIncome;
+      final dmg = w.playerDamage;
+      expect(w.canAscend, isFalse);
+      w.profile.honor = 4;
+      expect(w.creditIncome, closeTo(inc * 1.2, 0.01));
+      expect(w.playerDamage, closeTo(dmg * 1.12, 0.01));
+      w.counters['maxSector'] = 3;
+      expect(w.canAscend, isTrue);
+      expect(w.honorGain, greaterThanOrEqualTo(1));
+    });
   });
 }

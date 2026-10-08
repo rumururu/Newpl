@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../game/crew.dart';
 import '../game/missions.dart';
 import '../game/models.dart';
+import '../game/ships.dart';
 import '../game/world.dart';
 import 'chibi.dart';
 import 'common.dart';
@@ -135,6 +136,9 @@ class _ShipTab extends StatelessWidget {
       UpgradeKind.shield => w.level(k) == 0
           ? '모든 피해를 막는 실드 (F키 / 🛡 버튼)'
           : '${(2.5 + w.level(k) * 0.5).toStringAsFixed(1)}초 · 쿨타임 ${w.shieldCooldownMax.toStringAsFixed(1)}초',
+      UpgradeKind.drone => w.level(k) == 0
+          ? '곁을 돌며 자동으로 쏘고 아이템을 끌어와요'
+          : '피해 ${w.droneDamage.toInt()} · ${w.droneInterval.toStringAsFixed(2)}초마다 발사',
     };
   }
 
@@ -150,7 +154,8 @@ class _ShipTab extends StatelessWidget {
             actionBtn(
               world.level(k) >= k.maxLevel
                   ? 'MAX'
-                  : (world.level(k) == 0 && (k == UpgradeKind.missile || k == UpgradeKind.shield)
+                  : (world.level(k) == 0 &&
+                          (k == UpgradeKind.missile || k == UpgradeKind.shield || k == UpgradeKind.drone)
                       ? '장착 ${costText(world.upgradeCost(k))}'
                       : costText(world.upgradeCost(k))),
               world.level(k) < k.maxLevel && world.canAfford(world.upgradeCost(k)),
@@ -159,7 +164,39 @@ class _ShipTab extends StatelessWidget {
           ),
         const SizedBox(height: 8),
         const Text('💨 부스트(Shift / 💨 버튼)는 기본 장착되어 있어요.', style: dimStyle),
+        const Divider(color: Colors.white24, height: 28),
+        const Text('🛸 격납고', style: sectionStyle),
+        const SizedBox(height: 4),
+        for (final t in shipTypes) _shipRow(t),
       ],
+    );
+  }
+
+  Widget _shipRow(ShipType t) {
+    final p = world.profile;
+    final unlocked = p.shipUnlocked(t);
+    final current = p.shipType == t.id;
+    final stats = [
+      if (t.hpMul != 1) '체력 x${t.hpMul}',
+      if (t.speedMul != 1) '속도 x${t.speedMul}',
+      if (t.dmgMul != 1) '공격 x${t.dmgMul}',
+      if (t.fireMul != 1) '연사 x${(1 / t.fireMul).toStringAsFixed(2)}',
+      if (t.oreMul != 1) '광석 x${t.oreMul}',
+      if (t.crit > 0) '치명타 ${(t.crit * 100).round()}%',
+    ].join(' · ');
+    final Widget trailing;
+    if (current) {
+      trailing = const Text('탑승 중', style: TextStyle(color: Color(0xFF7CFFB2)));
+    } else if (unlocked) {
+      trailing = actionBtn('탑승', true, () => act(() => world.switchShip(t)));
+    } else {
+      trailing = actionBtn('⭐${t.gemPrice}', p.gems >= t.gemPrice, () => act(() => world.buyShip(t)),
+          color: const Color(0xFFAD1457));
+    }
+    return _row(
+      '${t.name}${unlocked ? '' : ' 🔒'}',
+      '${t.desc}${stats.isEmpty ? '' : '\n$stats'}${unlocked ? '' : '\n해금: ${t.unlockDesc} 또는 젬'}',
+      trailing,
     );
   }
 }

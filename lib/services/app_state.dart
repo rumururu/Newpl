@@ -7,6 +7,7 @@ import '../game/world.dart';
 import 'ads.dart';
 import 'audio.dart';
 import 'monetization.dart';
+import 'notifications.dart';
 
 /// 앱 전역 상태: 프로필, 결제, 오디오, 현재 월드
 class AppState {
@@ -18,6 +19,7 @@ class AppState {
 
   static Future<void> init() async {
     profile = await SaveService.loadProfile();
+    profile.refreshDaily(DateTime.now());
     money.onGrant = grant;
     await money.init();
     AudioService.instance
@@ -25,6 +27,7 @@ class AppState {
       ..musicOn = profile.music;
     AudioService.instance.init();
     AdService.instance.init();
+    NotificationService.instance.init();
   }
 
   /// 보상형 광고 시청. 사령관 패스 보유자는 광고 없이 바로 보상.

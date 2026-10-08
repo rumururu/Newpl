@@ -6,6 +6,7 @@ import 'crew.dart';
 import 'missions.dart';
 import 'models.dart';
 import 'profile.dart';
+import 'ships.dart';
 
 class InputState {
   Offset move = Offset.zero; // 길이 0..1
@@ -15,7 +16,7 @@ class InputState {
   bool autoAim = false;
 }
 
-enum UpgradeKind { weapon, hull, engine, missile, shield }
+enum UpgradeKind { weapon, hull, engine, missile, shield, drone }
 
 extension UpgradeInfo on UpgradeKind {
   String get label => switch (this) {
@@ -24,9 +25,10 @@ extension UpgradeInfo on UpgradeKind {
         UpgradeKind.engine => '엔진',
         UpgradeKind.missile => '유도 미사일',
         UpgradeKind.shield => '에너지 실드',
+        UpgradeKind.drone => '전투 드론',
       };
   int get maxLevel => switch (this) {
-        UpgradeKind.missile || UpgradeKind.shield => 5,
+        UpgradeKind.missile || UpgradeKind.shield || UpgradeKind.drone => 5,
         _ => 8,
       };
 }
@@ -153,6 +155,7 @@ class GameWorld {
   double eventTimer = 70;
   double jellyTimer = 20;
   double _secondTimer = 0;
+  double _playAcc = 0;
   double shake = 0;
   double boostTime = 0;
   bool paused = false;
@@ -174,14 +177,33 @@ class GameWorld {
   int get crewSlots => 3 + (profile.extraCrewSlot ? 1 : 0);
   int get assignedCount => roster.where((c) => c.assigned).length;
 
+  ShipType get ship => shipTypeById(profile.shipType);
+
   double get playerMaxHp =>
-      (100 + level(UpgradeKind.hull) * 40.0) * (1 + crewBonus(CrewRole.engineer));
+      (100 + level(UpgradeKind.hull) * 40.0) * (1 + crewBonus(CrewRole.engineer)) * ship.hpMul;
   double get playerSpeed =>
-      (260 + level(UpgradeKind.engine) * 40.0) * (1 + crewBonus(CrewRole.pilot));
+      (260 + level(UpgradeKind.engine) * 40.0) * (1 + crewBonus(CrewRole.pilot)) * ship.speedMul;
   double get playerDamage =>
-      (10 + weaponLevel * 5.0) * (1 + crewBonus(CrewRole.gunner));
+      (10 + weaponLevel * 5.0) *
+      (1 + crewBonus(CrewRole.gunner)) *
+      ship.dmgMul *
+      profile.honorDamageMul;
   double get playerFireInterval =>
-      0.25 * pow(0.9, weaponLevel) * (buffs.containsKey(PowerUpKind.rapid) ? 0.45 : 1);
+      0.25 *
+      pow(0.9, weaponLevel) *
+      ship.fireMul *
+      (buffs.containsKey(PowerUpKind.rapid) ? 0.45 : 1);
+  double get magnetRadius =>
+      (buffs.containsKey(PowerUpKind.magnet) ? 450.0 : 170.0) * ship.magnetMul +
+      level(UpgradeKind.drone) * 30;
+
+  // 전투 드론
+  int get droneLevel => level(UpgradeKind.drone);
+  double droneAngle = 0;
+  double _droneCooldown = 0;
+  Offset get dronePos => player.pos + OffsetX.fromAngle(droneAngle, 48);
+  double get droneDamage => (5 + droneLevel * 4) * (1 + crewBonus(CrewRole.gunner)) * profile.honorDamageMul;
+  double get droneInterval => 1.2 - droneLevel * 0.15;
   int get playerShots => weaponLevel >= 6 ? 3 : (weaponLevel >= 3 ? 2 : 1);
   double get cooldownMul => 1 - min(0.5, crewBonus(CrewRole.scientist));
   double get missileCooldownMax => 8 * cooldownMul;
@@ -204,7 +226,14 @@ class GameWorld {
       stations.fold<int>(0, (s, st) => s + st.habitatLevel - 1) * 0.15;
 
   double get _incomeMul =>
-      (1 + crewBonus(CrewRole.trader)) * (profile.premium ? 1.25 : 1);
+      (1 + crewBonus(CrewRole.trader)) * (profile.premium ? 1.25 : 1) * profile.honorIncomeMul;
+
+  // ---------- 은하 명예 ----------
+  /// 섹터 4(인덱스 3)에 도달하면 환생 가능
+  bool get canAscend => counter('maxSector') >= 3;
+
+  /// 환생 시 얻는 명예 점수
+  int get honorGain => max(1, sqrt(empireValue / 500).floor());
 
   double planetCreditRate(Planet p) =>
       p.raided ? 0 : p.ratePerLevel.$1 * p.colonyLevel * sectorMul * _incomeMul;
@@ -247,7 +276,7 @@ class GameWorld {
   Cost upgradeCost(UpgradeKind k) {
     final lv = level(k);
     return switch (k) {
-      UpgradeKind.missile || UpgradeKind.shield => (
+      UpgradeKind.missile || UpgradeKind.shield || UpgradeKind.drone => (
           (250 * pow(1.8, lv)).round(),
           50 * (lv + 1)
         ),
@@ -503,6 +532,7 @@ class GameWorld {
     if (p.colonyLevel >= Planet.maxLevel) return false;
     if (!_pay(planetCost(p))) return false;
     p.colonyLevel++;
+    profile.addStat('colonyUps');
     if (p.colonyLevel == 1) {
       _count('colonies');
       profile.addStat('colonies');
@@ -565,7 +595,29 @@ class GameWorld {
         say(Speaker.captain, level(k) == 1 ? '유도 미사일 장착! (Q)' : '미사일 강화!');
       case UpgradeKind.shield:
         say(Speaker.captain, level(k) == 1 ? '에너지 실드 장착! (F)' : '실드 강화!');
+      case UpgradeKind.drone:
+        profile.maxStat('drone', 1);
+        say(Speaker.captain, level(k) == 1 ? '전투 드론 출격! 든든한 친구가 생겼다.' : '드론 강화!');
     }
+    return true;
+  }
+
+  /// 격납고에서 함선 교체 (정거장에서만)
+  bool switchShip(ShipType t) {
+    if (!profile.shipUnlocked(t) || profile.shipType == t.id) return false;
+    final ratio = player.hp / playerMaxHp;
+    profile.shipType = t.id;
+    profile.dirty = true;
+    player.hp = playerMaxHp * ratio;
+    sfx.add(Sfx.upgrade);
+    say(Speaker.captain, '${euro(t.name)} 갈아탔다! 느낌 좋은데?');
+    return true;
+  }
+
+  bool buyShip(ShipType t) {
+    if (!profile.buyShip(t)) return false;
+    sfx.add(Sfx.gem);
+    switchShip(t);
     return true;
   }
 
@@ -888,6 +940,7 @@ class GameWorld {
     boostTime = max(0, boostTime - dt);
 
     _updatePlayer(dt, input);
+    _updateDrone(dt);
     _updatePirates(dt);
     _updateStations(dt);
     _updateMissiles(dt);
@@ -899,6 +952,11 @@ class GameWorld {
     _updateSpawning(dt);
     _updateMissions(dt);
 
+    _playAcc += dt;
+    if (_playAcc >= 60) {
+      _playAcc -= 60;
+      profile.addStat('playMin');
+    }
     _secondTimer += dt;
     if (_secondTimer > 0.5) {
       _secondTimer = 0;
@@ -974,7 +1032,10 @@ class GameWorld {
       for (var i = 0; i < shots; i++) {
         final spread = shots == 1 ? 0.0 : (i - (shots - 1) / 2) * 0.12;
         final dir = OffsetX.fromAngle(aim + spread);
-        bullets.add(Bullet(p.pos + dir * 22, dir * 760 + p.vel * 0.5, playerDamage, true));
+        final crit = ship.crit > 0 && _rng.nextDouble() < ship.crit;
+        bullets.add(Bullet(p.pos + dir * 22, dir * 760 + p.vel * 0.5,
+            playerDamage * (crit ? 2.5 : 1), true,
+            big: crit));
       }
       sfx.add(Sfx.shoot);
     }
@@ -1002,6 +1063,27 @@ class GameWorld {
 
   /// 첫 섹터 초반에는 해적 공격력을 낮춰 입문을 돕는다
   double get _newbieMul => sector == 0 && threat < 2 ? 0.6 : 1.0;
+
+  void _updateDrone(double dt) {
+    if (droneLevel == 0 || !player.alive) return;
+    droneAngle += dt * 2.2;
+    _droneCooldown -= dt;
+    if (_droneCooldown > 0) return;
+    final from = dronePos;
+    Pirate? best;
+    var bestD = 450.0;
+    for (final e in pirates) {
+      final d = (e.pos - from).distance;
+      if (d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    if (best == null) return;
+    _droneCooldown = droneInterval;
+    final dir = (best.pos - from).normalized();
+    bullets.add(Bullet(from + dir * 8, dir * 720, droneDamage, true));
+  }
 
   Offset _clampWorld(Offset pos, void Function(Offset) setVel) {
     const h = worldHalf;
@@ -1257,10 +1339,14 @@ class GameWorld {
     missiles.removeWhere(dead.contains);
   }
 
-  void _hitPirate(Pirate e, double dmg, Offset at) {
+  void _hitPirate(Pirate e, double dmg, Offset at, {bool crit = false}) {
     e.hp -= dmg;
     e.hitFlash = 0.1;
-    if (_rng.nextDouble() < 0.6) _float(at, dmg.round().toString(), const Color(0xFFFFF59D));
+    if (crit) {
+      _float(at, '치명타! ${dmg.round()}', const Color(0xFFFF9100), big: true);
+    } else if (_rng.nextDouble() < 0.6) {
+      _float(at, dmg.round().toString(), const Color(0xFFFFF59D));
+    }
   }
 
   void _updateBullets(double dt) {
@@ -1275,7 +1361,7 @@ class GameWorld {
       if (b.fromPlayer) {
         for (final e in pirates) {
           if ((e.pos - b.pos).distance < e.radius) {
-            _hitPirate(e, b.damage, b.pos);
+            _hitPirate(e, b.damage, b.pos, crit: b.big);
             dead.add(b);
             _spark(b.pos, const Color(0xFFFFF59D));
             sfx.add(Sfx.hit);
@@ -1414,7 +1500,7 @@ class GameWorld {
   }
 
   void _updatePickups(double dt) {
-    final magnet = buffs.containsKey(PowerUpKind.magnet) ? 450.0 : 170.0;
+    final magnet = magnetRadius;
     for (final k in pickups) {
       k.life -= dt;
       final to = player.pos - k.pos;
@@ -1440,7 +1526,7 @@ class GameWorld {
         sfx.add(Sfx.coin);
         _float(k.pos, '+$n', const Color(0xFFFFD54F));
       case PickupKind.ore:
-        final n = (k.amount * (1 + crewBonus(CrewRole.miner))).round();
+        final n = (k.amount * (1 + crewBonus(CrewRole.miner)) * ship.oreMul).round();
         ore += n;
         profile.addStat('ore', n);
         for (final m in activeMissions) {
@@ -1456,6 +1542,7 @@ class GameWorld {
       case PickupKind.power:
         final pk = k.power!;
         buffs[pk] = pk.duration;
+        profile.addStat('powerups');
         sfx.add(Sfx.upgrade);
         _float(k.pos, '${pk.icon} ${pk.label}!', const Color(0xFFB9F6CA), big: true);
     }

@@ -126,7 +126,10 @@ class WorldPainter extends CustomPainter {
     for (final e in world.pirates) {
       if (view.inflate(60).contains(e.pos)) _paintPirate(canvas, e, t);
     }
-    if (world.player.alive) _paintPlayer(canvas, t);
+    if (world.player.alive) {
+      _paintPlayer(canvas, t);
+      if (world.droneLevel > 0) _paintDrone(canvas, t);
+    }
     for (final f in world.floats) {
       // 알파를 4단계로 나눠 TextPainter 캐시 재사용
       final a = ((f.life.clamp(0.0, 1.0) * 4).ceil() / 4).clamp(0.25, 1.0);
@@ -545,7 +548,28 @@ class WorldPainter extends CustomPainter {
             ..close(),
           Paint()..color = world.boostTime > 0 ? const Color(0xFF80D8FF) : const Color(0xFFFFB74D));
     }
+    // 함선 종류별 실루엣: 날개 폭/동체 길이 배율
+    final ship = world.ship;
+    canvas.save();
+    canvas.scale(ship.wing / 26, ship.length / 46);
     final wing = Paint()..color = wingC;
+    if (ship.id == 'phantom') {
+      // 팬텀: 뒤로 꺾인 날개
+      canvas.drawPath(
+          Path()
+            ..moveTo(-6, -14)
+            ..lineTo(-26, 22)
+            ..lineTo(-8, 10)
+            ..close(),
+          wing);
+      canvas.drawPath(
+          Path()
+            ..moveTo(6, -14)
+            ..lineTo(26, 22)
+            ..lineTo(8, 10)
+            ..close(),
+          wing);
+    }
     canvas.drawPath(
         Path()
           ..moveTo(-8, -4)
@@ -570,6 +594,21 @@ class WorldPainter extends CustomPainter {
         RRect.fromRectAndRadius(const Rect.fromLTWH(-11, -26, 22, 46), const Radius.circular(11)),
         Paint()..color = hull);
     canvas.drawRect(const Rect.fromLTWH(-11, 8, 22, 4), Paint()..color = skin.stripe);
+    if (ship.id == 'fortress') {
+      // 포트리스: 장갑판
+      final plate = Paint()..color = const Color(0xFF78909C);
+      canvas.drawRect(const Rect.fromLTWH(-15, -4, 4, 18), plate);
+      canvas.drawRect(const Rect.fromLTWH(11, -4, 4, 18), plate);
+    } else if (ship.id == 'prospector') {
+      // 프로스펙터: 앞쪽 채굴 집게
+      final claw = Paint()
+        ..color = const Color(0xFFFFB300)
+        ..strokeWidth = 3
+        ..style = PaintingStyle.stroke;
+      canvas.drawArc(const Rect.fromLTWH(-12, -36, 10, 14), pi * 0.5, pi, false, claw);
+      canvas.drawArc(const Rect.fromLTWH(2, -36, 10, 14), -pi * 0.5, pi, false, claw);
+    }
+    canvas.restore();
     canvas.drawCircle(const Offset(0, -8), 10, Paint()..color = const Color(0xFF263238));
     canvas.save();
     canvas.rotate(-(p.angle + pi / 2));
@@ -596,6 +635,19 @@ class WorldPainter extends CustomPainter {
             ..strokeWidth = 3
             ..color = const Color(0xFF80D8FF).withValues(alpha: 0.6 + 0.3 * pulse));
     }
+  }
+
+  void _paintDrone(Canvas canvas, double t) {
+    final c = world.dronePos;
+    canvas.drawCircle(c, 9, Paint()..color = const Color(0xFF546E7A));
+    canvas.drawCircle(c, 6, Paint()..color = const Color(0xFFB0BEC5));
+    // 깜빡이는 눈
+    canvas.drawCircle(c, 3, Paint()..color = sin(t * 6) > 0 ? const Color(0xFF00E5FF) : const Color(0xFF006064));
+    final rotor = Paint()
+      ..color = Colors.white70
+      ..strokeWidth = 2;
+    final a = t * 20;
+    canvas.drawLine(c + OffsetX.fromAngle(a, 12), c - OffsetX.fromAngle(a, 12), rotor);
   }
 
   Offset _rot(Offset o, double a) =>

@@ -11,6 +11,7 @@ import '../game/save.dart';
 import '../game/world.dart';
 import '../services/app_state.dart';
 import '../services/audio.dart';
+import '../services/notifications.dart';
 import 'chibi.dart';
 import 'common.dart';
 import 'merchant_panel.dart';
@@ -61,13 +62,18 @@ class _GameScreenState extends State<GameScreen>
     AppState.deliverPending();
     _notified.addAll(w.profile.claimable.map((a) => a.id));
     _ticker = createTicker(_onTick)..start();
+    NotificationService.instance.cancelAll();
+    if (w.profile.notifications) NotificationService.instance.requestPermission();
     AudioService.instance.startMusic();
     WidgetsBinding.instance.addPostFrameCallback((_) => _showOffline());
   }
 
+  /// 환생 등으로 이 월드를 버릴 때는 저장하지 않는다
+  bool _discarded = false;
+
   @override
   void dispose() {
-    SaveService.save(w);
+    if (!_discarded) SaveService.save(w);
     AppState.world = null;
     AudioService.instance.stopMusic();
     WidgetsBinding.instance.removeObserver(this);
@@ -81,11 +87,19 @@ class _GameScreenState extends State<GameScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       AudioService.instance.startMusic();
+      NotificationService.instance.cancelAll();
       // 백그라운드에 있던 시간만큼 오프라인 수입 (1분 이상일 때)
       if (w.savedAt != null && !_modal) _showOffline();
-    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+    } else if (!_discarded &&
+        (state == AppLifecycleState.paused || state == AppLifecycleState.hidden)) {
       w.savedAt ??= DateTime.now();
       SaveService.save(w);
+      if (w.profile.notifications) {
+        NotificationService.instance.scheduleReturn(
+          storageFullIn: Duration(hours: w.profile.premium ? 8 : 2),
+          hasColonies: w.counter('colonies') > 0,
+        );
+      }
       AudioService.instance.stopMusic();
     }
   }
@@ -120,7 +134,7 @@ class _GameScreenState extends State<GameScreen>
     w.sfx.clear();
 
     _saveTimer += dt;
-    if (_saveTimer > 20) {
+    if (_saveTimer > 20 && !_discarded) {
       _saveTimer = 0;
       SaveService.save(w);
     }
@@ -256,6 +270,63 @@ class _GameScreenState extends State<GameScreen>
     w.sfx.add(Sfx.coin);
     _modal = false;
     SaveService.save(w);
+  }
+
+  Future<void> _showAscend() async {
+    final p = w.profile;
+    final can = w.canAscend;
+    final gain = w.honorGain;
+    _modal = true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: kPanelColor,
+        title: const Text('🌌 은하 명예', textAlign: TextAlign.center),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('현재 명예 ${p.honor}점 (환생 ${p.ascensions}회)', style: bodyStyle),
+            Text('수입 +${(p.honor * 5)}% · 공격력 +${(p.honor * 3)}%', style: dimStyle),
+            const Divider(color: Colors.white24),
+            const Text(
+              '환생하면 지금 우주(섹터, 식민지, 정거장, 함선 강화, 승무원, 크레딧)가 초기화되고\n'
+              '대신 영구 보너스인 명예 점수를 받아요.\n젬, 꾸미기, 함선, 업적은 유지돼요.',
+              style: bodyStyle,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 10),
+            if (can)
+              Text('지금 환생하면 명예 +$gain점!\n(제국 가치가 클수록 많이 받아요)',
+                  style: const TextStyle(color: Color(0xFFFFD54F), fontSize: 16),
+                  textAlign: TextAlign.center)
+            else
+              const Text('섹터 4에 도달하면 환생할 수 있어요.',
+                  style: TextStyle(color: Colors.white54), textAlign: TextAlign.center),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('닫기')),
+          if (can)
+            FilledButton(onPressed: () => Navigator.pop(c, true), child: Text('환생 (+$gain)')),
+        ],
+      ),
+    );
+    _modal = false;
+    if (ok != true || !mounted) return;
+    if (!await confirmDialog(context, '정말 환생할까요?', '현재 우주가 초기화돼요. 되돌릴 수 없어요.', ok: '환생')) {
+      return;
+    }
+    _discarded = true;
+    _ticker.stop();
+    p.honor += gain;
+    p.ascensions++;
+    p.addStat('ascensions');
+    await SaveService.clearWorld();
+    await SaveService.saveProfile(p);
+    if (!mounted) return;
+    AudioService.instance.play(Sfx.warp);
+    Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => GameScreen(world: GameWorld(profile: p))));
   }
 
   Future<void> _reviveWithAd() async {
@@ -428,7 +499,7 @@ class _GameScreenState extends State<GameScreen>
               )),
               const SizedBox(width: 6),
               Badge(
-                isLabelVisible: w.profile.claimable.isNotEmpty,
+                isLabelVisible: w.profile.claimable.isNotEmpty || w.profile.dailyClaimable > 0,
                 smallSize: 10,
                 child: _iconBtn(Icons.menu, () => _setOverlay(_Overlay.pause)),
               ),
@@ -747,6 +818,17 @@ class _GameScreenState extends State<GameScreen>
                 child: actionBtn('🏆 업적', true, () => _modalRoute(const AchievementsScreen())),
               ),
             ),
+            const SizedBox(height: 8),
+            Badge(
+              isLabelVisible: w.profile.dailyClaimable > 0,
+              label: Text('${w.profile.dailyClaimable}'),
+              child: SizedBox(
+                width: double.infinity,
+                child: actionBtn('📅 일일 퀘스트', true, () => _modalRoute(const DailyQuestScreen())),
+              ),
+            ),
+            const SizedBox(height: 8),
+            actionBtn('🌌 은하 명예 (환생)', true, _showAscend, color: const Color(0xFF4527A0)),
             const SizedBox(height: 8),
             actionBtn('⚙ 설정', true, () => _modalRoute(const SettingsScreen()),
                 color: const Color(0xFF455A64)),
