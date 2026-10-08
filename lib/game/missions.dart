@@ -108,7 +108,7 @@ const storySteps = [
   StoryStep('새 정거장 건설', 'stations', 2, [
     (Speaker.advisor, '이제 영역을 넓힐 때예요! 행성에서 떨어진 빈 우주에 정거장을 지어봐요.'),
   ], credits: 300, gems: 10),
-  StoryStep('섹터 두목 격파', 'sectorBoss', 1, [
+  StoryStep('섹터 두목 격파', 'sectorBosses', 1, [
     (Speaker.pirate, '내 구역을 휘젓고 다니는 꼬마 선장이 있다며? 직접 상대해주지!'),
     (Speaker.advisor, '섹터 두목이 나타났어요! 무기를 강화하고 맞서세요!'),
   ], credits: 500, gems: 15),
@@ -124,7 +124,8 @@ StoryStep storyStepAt(int index) {
   final k = index - storySteps.length;
   final sector = k ~/ 2 + 1;
   if (k.isEven) {
-    return StoryStep('섹터 ${sector + 1} 두목 격파', 'sectorBoss', 1, [
+    // 섹터 두목은 섹터마다 처음 한 번만 카운트되므로 누적 수로 판단
+    return StoryStep('섹터 ${sector + 1} 두목 격파', 'sectorBosses', sector + 1, [
       (Speaker.advisor, '이 섹터의 두목을 찾아 쓰러뜨려요! 위협도가 오르면 나타나요.'),
     ], credits: 500 * (sector + 1), gems: 15);
   }

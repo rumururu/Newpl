@@ -188,7 +188,8 @@ void main() {
     });
 
     test('스토리 무한 단계 생성', () {
-      expect(storyStepAt(storySteps.length).key, 'sectorBoss');
+      expect(storyStepAt(storySteps.length).key, 'sectorBosses');
+      expect(storyStepAt(storySteps.length).target, 2);
       expect(storyStepAt(storySteps.length + 1).key, 'sector');
     });
   });
@@ -413,6 +414,74 @@ void main() {
       w.counters['maxSector'] = 3;
       expect(w.canAscend, isTrue);
       expect(w.honorGain, greaterThanOrEqualTo(1));
+    });
+  });
+
+  group('버그 회귀', () {
+    test('격추 상태로 저장하면 불러와도 격추 상태 (공짜 부활 방지)', () {
+      final w = GameWorld(seed: 41);
+      w.player.hp = 1;
+      w.bullets.add(Bullet(w.player.pos, Offset.zero, 50, false));
+      w.update(1 / 60, InputState());
+      expect(w.player.alive, isFalse);
+      final w2 = GameWorld.fromJson(w.toJson(), w.profile);
+      expect(w2.player.alive, isFalse);
+      expect(w2.player.awaitingRevive, isTrue);
+    });
+
+    test('유성우 소행성은 맵 밖으로 나가면 사라진다', () {
+      final w = GameWorld(seed: 42);
+      final a = Asteroid(const Offset(GameWorld.worldHalf + 50, 0), 20, 1)
+        ..drift = const Offset(500, 0);
+      w.asteroids.add(a);
+      runFor(w, 0.5);
+      expect(w.asteroids.contains(a), isFalse);
+    });
+
+    test('임무 게시판은 비워도 타이머 전에는 다시 채워지지 않는다', () {
+      final w = GameWorld(seed: 43);
+      w.update(1 / 60, InputState());
+      for (final m in [...w.missionOffers]) {
+        w.acceptMission(m);
+      }
+      for (final m in [...w.activeMissions]) {
+        w.abandonMission(m);
+      }
+      w.update(1 / 60, InputState());
+      expect(w.missionOffers, isEmpty);
+    });
+
+    test('시계를 되돌려도 출석/광고 젬 중복 수령 불가', () {
+      final p = Profile();
+      expect(p.claimLogin(DateTime(2026, 6, 2)), greaterThan(0));
+      expect(p.claimLogin(DateTime(2026, 6, 1)), 0);
+      for (var i = 0; i < 3; i++) {
+        p.claimAdGems(DateTime(2026, 6, 2));
+      }
+      expect(p.claimAdGems(DateTime(2026, 6, 1)), isFalse);
+    });
+
+    test('이전 섹터로 돌아가도 새 섹터 두목 목표가 완료되지 않는다', () {
+      final w = rich(seed: 44);
+      w.counters['sectorBosses'] = 1;
+      w.bossDefeated = true;
+      w.warp(w.gates.firstWhere((g) => g.forward));
+      w.storyIndex = storySteps.length; // 섹터 2 두목 단계 (누적 2 필요)
+      w.warp(w.gates.firstWhere((g) => !g.forward));
+      expect(w.bossDefeated, isTrue);
+      final (v, t) = w.storyProgress;
+      expect(v < t, isTrue);
+    });
+
+    test('불러오기 후 현상수배범은 플레이어 근처에 다시 등장', () {
+      final w = GameWorld(seed: 45);
+      w.player.pos = const Offset(3000, 3000);
+      final m = Mission(id: 77, type: MissionType.bounty, target: 1, rewardCredits: 10, bountyName: '외눈 잭');
+      w.activeMissions.add(m);
+      final w2 = GameWorld.fromJson(w.toJson(), w.profile);
+      final b = w2.pirates.firstWhere((e) => e.missionId == 77);
+      expect((b.pos - const Offset(3000, 3000)).distance, lessThan(3500));
+      expect((b.pos - Offset.zero).distance, greaterThan(500));
     });
   });
 }

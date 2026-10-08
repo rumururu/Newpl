@@ -46,8 +46,12 @@ abstract class MonetizationService {
 
   bool get isTestMode;
 
-  static MonetizationService create() =>
-      (!kIsWeb && kReleaseMode) ? StoreMonetization() : DevMonetization();
+  static MonetizationService create() {
+    if (!kReleaseMode) return DevMonetization();
+    // 웹 정식 빌드(데모)에서는 결제/광고를 막는다 (무료 지급 방지)
+    if (kIsWeb) return WebDemoMonetization();
+    return StoreMonetization();
+  }
 }
 
 class DevMonetization extends MonetizationService {
@@ -81,6 +85,33 @@ class DevMonetization extends MonetizationService {
     return await (confirm?.call('[테스트 광고]', '광고를 끝까지 본 것으로 처리할까요?') ??
         Future.value(false));
   }
+}
+
+/// 웹 데모: 구매와 광고 보상은 모바일 앱에서만
+class WebDemoMonetization extends MonetizationService {
+  @override
+  bool get isTestMode => false;
+
+  @override
+  Future<void> init() async {}
+
+  @override
+  String priceOf(String productId) =>
+      productDefs.firstWhere((p) => p.id == productId).fallbackPrice;
+
+  Future<bool> _notice() async {
+    await confirm?.call('웹 데모', '구매와 광고 보상은 모바일 앱에서 이용할 수 있어요.');
+    return false;
+  }
+
+  @override
+  Future<bool> buy(String productId) => _notice();
+
+  @override
+  Future<void> restore() async {}
+
+  @override
+  Future<bool> showRewardedAd() => _notice();
 }
 
 class StoreMonetization extends MonetizationService {

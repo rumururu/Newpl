@@ -784,7 +784,6 @@ class GameWorld {
         'shipLevels' => levels.values.fold(0, (s, l) => s + l),
         'crew' => roster.length,
         'stations' => stations.length,
-        'sectorBoss' => bossDefeated ? 1 : 0,
         'sector' => counter('maxSector'),
         _ => counter(key),
       };
@@ -1456,6 +1455,7 @@ class GameWorld {
       _dropPickups(e.pos, PickupKind.ore, (120 * sectorMul).round(), 6);
       _dropPickups(e.pos, PickupKind.gem, 5, 5);
       if (e.sectorBoss) {
+        if (!bossDefeated) _count('sectorBosses');
         bossDefeated = true;
         say(Speaker.pirate, '으아악! 이 섹터는… 네 것이다…');
         say(Speaker.advisor, '섹터 두목 격파! 워프 게이트가 열렸어요! 🌀');
@@ -1475,6 +1475,10 @@ class GameWorld {
       a.hitFlash = max(0, a.hitFlash - dt);
       if (a.drift != Offset.zero) a.pos += a.drift * dt;
     }
+    // 떠다니는 유성우 소행성이 맵 밖으로 나가면 제거
+    asteroids.removeWhere((a) =>
+        a.drift != Offset.zero &&
+        (a.pos.dx.abs() > worldHalf + 100 || a.pos.dy.abs() > worldHalf + 100));
     final broken = asteroids.where((a) => a.hp <= 0).toList();
     for (final a in broken) {
       asteroids.remove(a);
@@ -1730,7 +1734,7 @@ class GameWorld {
     final maxPirates = min(18, (2 + (t - sector) * 1.5 + sector).floor());
 
     // 섹터 두목: 스토리 단계이거나 위협도가 충분히 오르면 등장
-    final storyWantsBoss = story.key == 'sectorBoss' && storyTimer > 12;
+    final storyWantsBoss = story.key == 'sectorBosses' && storyTimer > 12;
     if (!bossDefeated &&
         !sectorBossSpawned &&
         player.alive &&
@@ -1796,7 +1800,7 @@ class GameWorld {
 
   void _updateMissions(double dt) {
     offerTimer -= dt;
-    if (offerTimer <= 0 || missionOffers.isEmpty) _refreshOffers();
+    if (offerTimer <= 0) _refreshOffers();
     for (final m in [...activeMissions]) {
       if (m.type == MissionType.deliver) {
         final idx = m.planetIndex;
@@ -1869,6 +1873,8 @@ class GameWorld {
         'total': totalTime,
         'px': player.pos.dx,
         'py': player.pos.dy,
+        'hp': player.hp,
+        'dead': !player.alive,
         'savedAt': DateTime.now().millisecondsSinceEpoch,
       };
 
@@ -1890,6 +1896,7 @@ class GameWorld {
     }
     w.recruitCount = j['recruits'] as int;
     w._nextId = j['nextId'] as int;
+    w.player.pos = Offset((j['px'] as num).toDouble(), (j['py'] as num).toDouble());
     for (final m in (j['missions'] as List).cast<Map<String, dynamic>>()) {
       final mission = Mission.fromJson(m);
       w.activeMissions.add(mission);
@@ -1899,7 +1906,18 @@ class GameWorld {
     w.storyBase = j['storyBase'] as int;
     w.totalTime = (j['total'] as num).toDouble();
     w.player.pos = Offset((j['px'] as num).toDouble(), (j['py'] as num).toDouble());
-    w.player.hp = w.playerMaxHp;
+    w.player.hp = min(w.playerMaxHp, (j['hp'] as num?)?.toDouble() ?? w.playerMaxHp);
+    if (j['dead'] == true) {
+      // 격추된 채 저장했으면 부활 선택부터 (저장/불러오기로 공짜 부활 방지)
+      w.player
+        ..alive = false
+        ..awaitingRevive = true
+        ..deadTime = 0
+        ..deathPos = w.player.pos;
+    }
+    // 예전 저장 호환: 이미 쓰러뜨린 섹터 두목 수
+    final defeated = (w.bossDefeated ? 1 : 0) + w.sectors.values.where((e) => e.bossDefeated).length;
+    if (w.counter('sectorBosses') < defeated) w.counters['sectorBosses'] = defeated;
     w.savedAt = DateTime.fromMillisecondsSinceEpoch(j['savedAt'] as int);
     w.say(Speaker.advisor, '다시 오신 걸 환영해요, 선장님! 현재 목표: ${w.story.title}');
     return w;

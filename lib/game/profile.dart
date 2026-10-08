@@ -139,7 +139,8 @@ class Profile {
 
   /// 오늘 출석 보상을 받을 수 있으면 보상량, 아니면 null
   int? pendingLogin(DateTime now) {
-    if (dayKey(now) == lastLoginDay) return null;
+    // 시계를 되돌려 같은 날/과거 날짜로 다시 받는 것 방지
+    if (dayKey(now) <= lastLoginDay) return null;
     return loginRewards[(_nextStreak(now) - 1) % 7];
   }
 
@@ -159,8 +160,11 @@ class Profile {
     return r;
   }
 
-  int adGemsLeft(DateTime now) =>
-      dayKey(now) == adGemDay ? adGemsPerDay - adGemsToday : adGemsPerDay;
+  int adGemsLeft(DateTime now) {
+    final key = dayKey(now);
+    if (key < adGemDay) return 0; // 시계 되돌리기 방지
+    return key == adGemDay ? adGemsPerDay - adGemsToday : adGemsPerDay;
+  }
 
   bool claimAdGems(DateTime now) {
     if (adGemsLeft(now) <= 0) return false;

@@ -52,6 +52,16 @@ class _GameScreenState extends State<GameScreen>
   _Overlay _overlay = _Overlay.none;
   bool _modal = false; // 다이얼로그/다른 화면이 떠 있음
 
+  /// 모달이 끝날 때: 그 사이 백그라운드에 다녀왔다면 오프라인 수입 정산
+  void _endModal() {
+    _modal = false;
+    if (w.savedAt != null && mounted && !_discarded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_modal) _showOffline();
+      });
+    }
+  }
+
   GameWorld get w => widget.world;
 
   @override
@@ -73,7 +83,8 @@ class _GameScreenState extends State<GameScreen>
 
   @override
   void dispose() {
-    if (!_discarded) SaveService.save(w);
+    // 환생했거나 설정에서 데이터를 초기화했으면(프로필이 바뀜) 저장하지 않는다
+    if (!_discarded && identical(w.profile, AppState.profile)) SaveService.save(w);
     AppState.world = null;
     AudioService.instance.stopMusic();
     WidgetsBinding.instance.removeObserver(this);
@@ -91,6 +102,7 @@ class _GameScreenState extends State<GameScreen>
       // 백그라운드에 있던 시간만큼 오프라인 수입 (1분 이상일 때)
       if (w.savedAt != null && !_modal) _showOffline();
     } else if (!_discarded &&
+        identical(w.profile, AppState.profile) &&
         (state == AppLifecycleState.paused || state == AppLifecycleState.hidden)) {
       w.savedAt ??= DateTime.now();
       SaveService.save(w);
@@ -134,7 +146,7 @@ class _GameScreenState extends State<GameScreen>
     w.sfx.clear();
 
     _saveTimer += dt;
-    if (_saveTimer > 20 && !_discarded) {
+    if (_saveTimer > 20 && !_discarded && identical(w.profile, AppState.profile)) {
       _saveTimer = 0;
       SaveService.save(w);
     }
@@ -148,7 +160,9 @@ class _GameScreenState extends State<GameScreen>
           w.sfx.add(Sfx.gem);
         }
       }
-      if (w.profile.dirty && _profileSaveCount % 5 == 0) SaveService.saveProfile(w.profile);
+      if (w.profile.dirty && _profileSaveCount % 5 == 0 && identical(w.profile, AppState.profile)) {
+        SaveService.saveProfile(w.profile);
+      }
     }
     // 다른 오버레이가 사라졌으면 닫기
     if (_overlay == _Overlay.station && w.nearbyStation == null) _setOverlay(_Overlay.none);
@@ -213,7 +227,7 @@ class _GameScreenState extends State<GameScreen>
   Future<T?> _modalRoute<T>(Widget page) async {
     _modal = true;
     final r = await Navigator.of(context).push<T>(MaterialPageRoute(builder: (_) => page));
-    _modal = false;
+    _endModal();
     AppState.deliverPending();
     if (mounted) setState(() {});
     return r;
@@ -268,7 +282,7 @@ class _GameScreenState extends State<GameScreen>
     );
     w.applyOffline(c * (mult ?? 1), o * (mult ?? 1));
     w.sfx.add(Sfx.coin);
-    _modal = false;
+    _endModal();
     SaveService.save(w);
   }
 
@@ -311,7 +325,7 @@ class _GameScreenState extends State<GameScreen>
         ],
       ),
     );
-    _modal = false;
+    _endModal();
     if (ok != true || !mounted) return;
     if (!await confirmDialog(context, '정말 환생할까요?', '현재 우주가 초기화돼요. 되돌릴 수 없어요.', ok: '환생')) {
       return;
@@ -329,10 +343,15 @@ class _GameScreenState extends State<GameScreen>
         MaterialPageRoute(builder: (_) => GameScreen(world: GameWorld(profile: p))));
   }
 
+  bool _reviving = false;
+
   Future<void> _reviveWithAd() async {
+    if (_reviving) return; // 연타 방지
+    _reviving = true;
     _modal = true;
     final ok = await AppState.watchAd();
-    _modal = false;
+    _reviving = false;
+    _endModal();
     if (ok) {
       w.reviveHere();
     } else {
